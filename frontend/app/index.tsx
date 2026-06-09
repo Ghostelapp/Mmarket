@@ -1,0 +1,1258 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
+import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+
+import { useAuth } from "@/src/context/AuthContext";
+import { theme } from "@/src/constants/theme";
+import { apiRequest } from "@/src/lib/api";
+import { e2eeDecrypt, e2eeEncrypt } from "@/src/lib/crypto";
+import { useBiometricAuth } from "@/src/hooks/useBiometricAuth";
+import { EncryptedMessage, Listing, Transaction } from "@/src/types";
+
+const categories = [
+  "elektronika",
+  "moda",
+  "dom",
+  "motoryzacja",
+  "sport",
+  "dziecko",
+  "kolekcje",
+  "usługi lokalne",
+  "produkty cyfrowe legalne",
+  "inne",
+];
+
+const base64PixelBlue =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
+type TabKey = "market" | "sell" | "deals" | "profile" | "admin";
+
+type AdminDashboard = {
+  users: number;
+  listings: number;
+  active_transactions: number;
+  open_disputes: number;
+  open_reports: number;
+  suspicious_accounts: number;
+  commission_revenue_crypto: number;
+  system_status: string;
+};
+
+function PixelButton({
+  label,
+  icon,
+  onPress,
+  variant = "primary",
+  disabled = false,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  variant?: "primary" | "secondary" | "danger";
+  disabled?: boolean;
+}) {
+  const color =
+    variant === "danger" ? theme.danger : variant === "secondary" ? theme.textMuted : theme.neonBlue;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.button,
+        { borderColor: color, opacity: pressed || disabled ? 0.72 : 1 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={color} />
+      <Text style={[styles.buttonText, { color }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function Tag({ value }: { value: string }) {
+  return (
+    <View style={styles.tag}>
+      <Text style={styles.tagText}>{value}</Text>
+    </View>
+  );
+}
+
+function AuthScreen() {
+  const { register, login } = useAuth();
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [alias, setAlias] = useState("CipherFox");
+  const [location, setLocation] = useState("Warszawa");
+  const [otp, setOtp] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const onSubmit = async () => {
+    try {
+      setBusy(true);
+      if (mode === "register") {
+        await register({ email, password, alias, public_location: location });
+      } else {
+        await login({ email, password, otp_code: otp || undefined, device_name: "expo-mobile" });
+      }
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się zalogować");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <LinearGradient colors={["#05070f", "#0b1130", "#11081e"]} style={styles.container}>
+      <SafeAreaView style={styles.container}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.container}
+        >
+          <View style={styles.authWrap}>
+            <View style={styles.logoWrap}>
+              <MaterialCommunityIcons name="shield-lock-outline" size={34} color={theme.neonGreen} />
+              <Text style={styles.h1}>MASK Market</Text>
+              <Text style={styles.subtitle}>Kupuj i sprzedawaj za crypto. Bez ujawniania danych.</Text>
+            </View>
+
+            <View style={styles.segmentRow}>
+              {(["login", "register"] as const).map((option) => (
+                <Pressable
+                  key={option}
+                  onPress={() => setMode(option)}
+                  style={[styles.segmentBtn, mode === option && styles.segmentBtnActive]}
+                >
+                  <Text style={[styles.segmentText, mode === option && styles.segmentTextActive]}>
+                    {option === "login" ? "Logowanie" : "Rejestracja"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.panel}>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                placeholder="E-mail"
+                placeholderTextColor={theme.textMuted}
+              />
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                placeholder="Hasło"
+                placeholderTextColor={theme.textMuted}
+              />
+
+              {mode === "register" && (
+                <>
+                  <TextInput
+                    style={styles.input}
+                    value={alias}
+                    onChangeText={setAlias}
+                    placeholder="Alias publiczny"
+                    placeholderTextColor={theme.textMuted}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    value={location}
+                    onChangeText={setLocation}
+                    placeholder="Lokalizacja przybliżona"
+                    placeholderTextColor={theme.textMuted}
+                  />
+                </>
+              )}
+
+              {mode === "login" && (
+                <TextInput
+                  style={styles.input}
+                  value={otp}
+                  onChangeText={setOtp}
+                  placeholder="Kod 2FA (jeśli aktywny)"
+                  placeholderTextColor={theme.textMuted}
+                />
+              )}
+
+              <PixelButton
+                label={busy ? "Przetwarzanie..." : mode === "login" ? "Zaloguj" : "Załóż konto"}
+                icon="log-in-outline"
+                onPress={onSubmit}
+                disabled={busy}
+              />
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </LinearGradient>
+  );
+}
+
+function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> }) {
+  const [items, setItems] = useState<Listing[]>([]);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<string>("all");
+  const [loading, setLoading] = useState(false);
+
+  const fetchListings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const query = new URLSearchParams();
+      if (search.trim()) query.set("q", search.trim());
+      if (filter !== "all") query.set("category", filter);
+      const data = await apiRequest<Listing[]>(`/listings?${query.toString()}`, { auth: true });
+      setItems(data);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się pobrać ofert");
+    } finally {
+      setLoading(false);
+    }
+  }, [filter, search]);
+
+  useEffect(() => {
+    fetchListings();
+  }, [fetchListings]);
+
+  return (
+    <View style={styles.tabContent}>
+      <Text style={styles.h2}>Marketplace</Text>
+      <Text style={styles.subtitle}>Privacy-first P2P • Crypto-only • Escrow-first</Text>
+
+      <View style={styles.panel}>
+        <TextInput
+          style={styles.input}
+          placeholder="Szukaj po tytule/opisie"
+          placeholderTextColor={theme.textMuted}
+          value={search}
+          onChangeText={setSearch}
+        />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+          <Pressable style={[styles.filterChip, filter === "all" && styles.filterChipActive]} onPress={() => setFilter("all")}>
+            <Text style={styles.filterText}>Wszystkie</Text>
+          </Pressable>
+          {categories.map((cat) => (
+            <Pressable
+              key={cat}
+              style={[styles.filterChip, filter === cat && styles.filterChipActive]}
+              onPress={() => setFilter(cat)}
+            >
+              <Text style={styles.filterText}>{cat}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <PixelButton label="Odśwież" icon="refresh-outline" onPress={fetchListings} />
+      </View>
+
+      {loading ? (
+        <ActivityIndicator size="large" color={theme.neonBlue} />
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{ gap: 12, paddingBottom: 140 }}
+          renderItem={({ item, index }) => (
+            <Animated.View entering={FadeInDown.delay(index * 40).duration(360)} style={styles.panel}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{item.title}</Text>
+                <Tag value={item.status} />
+              </View>
+              <Text style={styles.cardBody} numberOfLines={2}>{item.description}</Text>
+              <View style={styles.rowWrap}>
+                <Tag value={item.category} />
+                <Tag value={`${item.price_fiat} ${item.fiat_currency}`} />
+                <Tag value={`${item.crypto_amount} ${item.crypto_token}`} />
+                <Tag value={item.location_public} />
+              </View>
+
+              <View style={styles.aliasRow}>
+                <MaterialCommunityIcons name="incognito" size={15} color={theme.neonViolet} />
+                <Text style={styles.caption}>
+                  Sprzedający: {item.seller_public?.display_alias || "ukryty"} • Trust {item.seller_public?.trust_score || 0}
+                </Text>
+              </View>
+
+              <View style={styles.actionsRow}>
+                <PixelButton label="Kup teraz" icon="flash-outline" onPress={() => onBuy(item)} />
+                <PixelButton
+                  label="Zgłoś"
+                  icon="warning-outline"
+                  variant="secondary"
+                  onPress={async () => {
+                    try {
+                      await apiRequest(`/listings/${item.id}/report`, {
+                        method: "POST",
+                        auth: true,
+                        body: { reason: "Podejrzana oferta", details: "Wymaga ręcznej moderacji" },
+                      });
+                      Alert.alert("OK", "Oferta zgłoszona");
+                    } catch (error: any) {
+                      Alert.alert("Błąd", error?.message || "Nie udało się zgłosić");
+                    }
+                  }}
+                />
+              </View>
+            </Animated.View>
+          )}
+          ListEmptyComponent={<Text style={styles.emptyText}>Brak aktywnych ofert.</Text>}
+        />
+      )}
+    </View>
+  );
+}
+
+function SellTab() {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("99");
+  const [currency, setCurrency] = useState<"PLN" | "EUR">("PLN");
+  const [category, setCategory] = useState(categories[0]);
+  const [condition, setCondition] = useState("nowy");
+  const [location, setLocation] = useState("Kraków");
+  const [feeInfo, setFeeInfo] = useState<{ listingId: string; amount: number; token: string; network: string } | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+
+  const createListing = async () => {
+    try {
+      setBusy(true);
+      const listing = await apiRequest<Listing>("/listings", {
+        method: "POST",
+        auth: true,
+        body: {
+          title,
+          description,
+          price_fiat: Number(price),
+          fiat_currency: currency,
+          category,
+          condition,
+          location_public: location,
+          shipping_options: ["blind-delivery", "punkt partnerski"],
+          images: [base64PixelBlue],
+        },
+      });
+      setFeeInfo({
+        listingId: listing.id,
+        amount: listing.listing_fee.amount,
+        token: listing.listing_fee.token,
+        network: listing.listing_fee.network,
+      });
+      Alert.alert("Oferta utworzona", "Aby opublikować, opłać listing fee.");
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się dodać oferty");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const payListingFee = async () => {
+    if (!feeInfo) return;
+    try {
+      setBusy(true);
+      await apiRequest(`/listings/${feeInfo.listingId}/pay-listing-fee`, {
+        method: "POST",
+        auth: true,
+        body: {
+          amount: feeInfo.amount,
+          token: feeInfo.token,
+          network: feeInfo.network,
+          payment_tx_hash: `0xLISTING${Date.now()}`,
+        },
+      });
+      Alert.alert("Sukces", "Opłata potwierdzona, oferta aktywna lub w moderacji.");
+      setFeeInfo(null);
+      setTitle("");
+      setDescription("");
+      setPrice("99");
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Płatność nieudana");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 140 }}>
+      <Text style={styles.h2}>Dodaj ofertę</Text>
+      <Text style={styles.subtitle}>Listing fee w crypto aktywuje publikację</Text>
+      <View style={styles.panel}>
+        <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Tytuł" placeholderTextColor={theme.textMuted} />
+        <TextInput
+          style={[styles.input, { minHeight: 88 }]}
+          value={description}
+          onChangeText={setDescription}
+          placeholder="Opis"
+          placeholderTextColor={theme.textMuted}
+          multiline
+        />
+        <TextInput
+          style={styles.input}
+          value={price}
+          onChangeText={setPrice}
+          placeholder="Cena"
+          placeholderTextColor={theme.textMuted}
+          keyboardType="numeric"
+        />
+
+        <View style={styles.rowWrap}>
+          <Pressable style={[styles.filterChip, currency === "PLN" && styles.filterChipActive]} onPress={() => setCurrency("PLN")}>
+            <Text style={styles.filterText}>PLN</Text>
+          </Pressable>
+          <Pressable style={[styles.filterChip, currency === "EUR" && styles.filterChipActive]} onPress={() => setCurrency("EUR")}>
+            <Text style={styles.filterText}>EUR</Text>
+          </Pressable>
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+          {categories.map((cat) => (
+            <Pressable key={cat} style={[styles.filterChip, category === cat && styles.filterChipActive]} onPress={() => setCategory(cat)}>
+              <Text style={styles.filterText}>{cat}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        <TextInput style={styles.input} value={condition} onChangeText={setCondition} placeholder="Stan" placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="Lokalizacja" placeholderTextColor={theme.textMuted} />
+
+        <PixelButton label={busy ? "Przetwarzanie..." : "Utwórz ofertę"} icon="add-circle-outline" onPress={createListing} disabled={busy} />
+
+        {feeInfo && (
+          <View style={[styles.panelSoft, { marginTop: 10 }]}> 
+            <Text style={styles.caption}>Opłata za wystawienie: {feeInfo.amount} {feeInfo.token}</Text>
+            <Text style={styles.caption}>Sieć: {feeInfo.network}</Text>
+            <PixelButton label="Opłać listing fee" icon="wallet-outline" onPress={payListingFee} disabled={busy} />
+          </View>
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+function DealsTab() {
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [selected, setSelected] = useState<Transaction | null>(null);
+  const [messages, setMessages] = useState<EncryptedMessage[]>([]);
+  const [messageText, setMessageText] = useState("");
+
+  const refreshTransactions = useCallback(async () => {
+    try {
+      const data = await apiRequest<Transaction[]>("/transactions", { auth: true });
+      setTransactions(data);
+      if (selected) {
+        const fresh = data.find((item) => item.id === selected.id) || null;
+        setSelected(fresh);
+      }
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się pobrać transakcji");
+    }
+  }, [selected]);
+
+  const loadMessages = async (tx: Transaction) => {
+    try {
+      const data = await apiRequest<EncryptedMessage[]>(`/transactions/${tx.id}/messages`, { auth: true });
+      setMessages(data);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się pobrać wiadomości");
+    }
+  };
+
+  useEffect(() => {
+    refreshTransactions();
+  }, [refreshTransactions]);
+
+  const sendMessage = async () => {
+    if (!selected || !messageText.trim()) return;
+    try {
+      const encrypted = e2eeEncrypt(messageText.trim(), selected.deal_room_id);
+      await apiRequest(`/transactions/${selected.id}/messages`, {
+        method: "POST",
+        auth: true,
+        body: {
+          ciphertext: encrypted.ciphertext,
+          nonce: encrypted.nonce,
+          message_type: "text",
+          expires_in_days: 14,
+        },
+      });
+      setMessageText("");
+      await loadMessages(selected);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się wysłać");
+    }
+  };
+
+  const callAction = async (endpoint: string, body?: any) => {
+    if (!selected) return;
+    try {
+      await apiRequest(`/transactions/${selected.id}${endpoint}`, { method: "POST", auth: true, body });
+      await refreshTransactions();
+      const found = transactions.find((t) => t.id === selected.id);
+      if (found) {
+        setSelected(found);
+        await loadMessages(found);
+      }
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Akcja nieudana");
+    }
+  };
+
+  return (
+    <View style={styles.tabContent}>
+      <Text style={styles.h2}>Deal Room</Text>
+      <Text style={styles.subtitle}>Alias transakcyjne • E2EE chat • Escrow status</Text>
+
+      {!selected ? (
+        <FlatList
+          data={transactions}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{ gap: 12, paddingBottom: 140 }}
+          renderItem={({ item }) => (
+            <Pressable
+              style={styles.panel}
+              onPress={async () => {
+                setSelected(item);
+                await loadMessages(item);
+              }}
+            >
+              <Text style={styles.cardTitle}>Deal {item.id.slice(0, 8)}</Text>
+              <Text style={styles.cardBody}>Status: {item.status} • Escrow: {item.escrow_status}</Text>
+              <Text style={styles.caption}>
+                Alias: {item.buyer_alias} / {item.seller_alias}
+              </Text>
+              <View style={styles.rowWrap}>
+                <Tag value={`${item.gross_amount} ${item.token}`} />
+                <Tag value={`Fee ${item.fee_percent}%`} />
+                <Tag value={item.network} />
+              </View>
+            </Pressable>
+          )}
+          ListEmptyComponent={<Text style={styles.emptyText}>Brak aktywnych deal rooms.</Text>}
+        />
+      ) : (
+        <View style={{ flex: 1 }}>
+          <View style={styles.panel}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.cardTitle}>Deal {selected.id.slice(0, 8)}</Text>
+              <Pressable onPress={() => setSelected(null)}>
+                <Text style={styles.caption}>Wróć</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.cardBody}>
+              Status: {selected.status} • Escrow: {selected.escrow_status} • Ship: {selected.shipping_status}
+            </Text>
+            <Text style={styles.caption}>
+              Alias kupującego: {selected.buyer_alias} • Alias sprzedającego: {selected.seller_alias}
+            </Text>
+
+            <View style={styles.actionsRow}>
+              <PixelButton
+                label="Fund escrow"
+                icon="wallet-outline"
+                variant="secondary"
+                onPress={() =>
+                  callAction("/fund", {
+                    amount: selected.gross_amount,
+                    token: selected.token,
+                    network: selected.network,
+                    tx_hash: `0xFUND${Date.now()}`,
+                  })
+                }
+              />
+              <PixelButton
+                label="Mark shipped"
+                icon="cube-outline"
+                variant="secondary"
+                onPress={() =>
+                  callAction("/mark-shipped", {
+                    encrypted_address_blob: `cipher-address-${Date.now()}`,
+                    carrier: "InPost",
+                  })
+                }
+              />
+            </View>
+
+            <View style={styles.actionsRow}>
+              <PixelButton
+                label="Confirm delivery"
+                icon="checkmark-done-outline"
+                onPress={() => callAction("/confirm-delivery")}
+              />
+              <PixelButton
+                label="Open dispute"
+                icon="alert-circle-outline"
+                variant="danger"
+                onPress={() => callAction("/open-dispute", { reason: "Problem z produktem" })}
+              />
+            </View>
+          </View>
+
+          <View style={[styles.panel, { flex: 1 }]}> 
+            <Text style={styles.cardTitle}>Czat E2EE</Text>
+            <Text style={styles.caption}>Admin nie widzi treści bez dobrowolnego zgłoszenia dowodów.</Text>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+              {messages.map((msg) => (
+                <View key={msg.id} style={styles.messageBubble}>
+                  <Text style={styles.messageText}>{e2eeDecrypt(msg.ciphertext, msg.nonce, selected.deal_room_id)}</Text>
+                  <Text style={styles.caption}>{new Date(msg.created_at).toLocaleString()}</Text>
+                </View>
+              ))}
+            </ScrollView>
+            <TextInput
+              style={styles.input}
+              value={messageText}
+              onChangeText={setMessageText}
+              placeholder="Wiadomość E2EE"
+              placeholderTextColor={theme.textMuted}
+            />
+            <View style={styles.actionsRow}>
+              <PixelButton label="Wyślij" icon="send-outline" onPress={sendMessage} />
+              <PixelButton
+                label="Zgłoś dowód"
+                icon="flag-outline"
+                variant="secondary"
+                onPress={async () => {
+                  try {
+                    await apiRequest(`/transactions/${selected.id}/messages/report-evidence`, {
+                      method: "POST",
+                      auth: true,
+                      body: {
+                        selected_messages: messages.slice(0, 2).map((m) => ({
+                          id: m.id,
+                          decrypted_text: e2eeDecrypt(m.ciphertext, m.nonce, selected.deal_room_id),
+                        })),
+                        dispute_reason: "Dobrowolne ujawnienie dowodów",
+                      },
+                    });
+                    Alert.alert("OK", "Wybrane wiadomości przekazano do sporu.");
+                  } catch (error: any) {
+                    Alert.alert("Błąd", error?.message || "Nie udało się zgłosić dowodów");
+                  }
+                }}
+              />
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function ProfileTab() {
+  const { user, logout, refreshProfile } = useAuth();
+  const { checking, runBiometricCheck } = useBiometricAuth();
+  const [security, setSecurity] = useState<any>(null);
+  const [devices, setDevices] = useState<any[]>([]);
+  const [passwordFor2FA, setPasswordFor2FA] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [pendingSecret, setPendingSecret] = useState("");
+
+  const loadSecurity = async () => {
+    try {
+      const sec = await apiRequest<any>("/me/security", { auth: true });
+      const dev = await apiRequest<any[]>("/me/devices", { auth: true });
+      setSecurity(sec);
+      setDevices(dev);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się pobrać zabezpieczeń");
+    }
+  };
+
+  useEffect(() => {
+    loadSecurity();
+  }, []);
+
+  const pulse = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
+
+  const runBiometric = async () => {
+    pulse.value = withSpring(1.06, { damping: 9 }, () => {
+      pulse.value = withSpring(1);
+    });
+    const result = await runBiometricCheck();
+    Alert.alert("Biometria", result.success ? "Potwierdzono" : result.reason);
+  };
+
+  const enable2FA = async () => {
+    try {
+      const data = await apiRequest<any>("/auth/2fa/enable", {
+        method: "POST",
+        auth: true,
+        body: { account_password: passwordFor2FA },
+      });
+      setPendingSecret(data.secret);
+      Alert.alert("Sekret TOTP", data.secret);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się aktywować 2FA");
+    }
+  };
+
+  const verify2FA = async () => {
+    try {
+      await apiRequest("/auth/2fa/verify", {
+        method: "POST",
+        auth: true,
+        body: { code: otpCode },
+      });
+      Alert.alert("Sukces", "2FA aktywne");
+      setOtpCode("");
+      setPendingSecret("");
+      await refreshProfile();
+      await loadSecurity();
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Niepoprawny kod");
+    }
+  };
+
+  const registerPasskeyDemo = async () => {
+    try {
+      await apiRequest("/auth/passkey/register", {
+        method: "POST",
+        auth: true,
+        body: {
+          credential_id: `cred-${Date.now()}`,
+          public_key: `pk-${Date.now()}`,
+          nickname: "Device Passkey",
+        },
+      });
+      Alert.alert("Sukces", "Passkey zapisany.");
+      await loadSecurity();
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się dodać passkey");
+    }
+  };
+
+  return (
+    <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 160 }}>
+      <Text style={styles.h2}>Profil i bezpieczeństwo</Text>
+      <Text style={styles.subtitle}>Trust without identity • Privacy Shield • Panic Lock</Text>
+
+      <Animated.View style={[styles.panel, animatedStyle]}>
+        <Text style={styles.cardTitle}>{user?.alias}</Text>
+        <Text style={styles.caption}>Poziom prywatności: {user?.privacy_level || 0}/100</Text>
+        <Text style={styles.caption}>Poziom zaufania: {user?.public_trust_level || "starter"}</Text>
+        <View style={styles.rowWrap}>
+          <Tag value="No public wallet" />
+          <Tag value="Alias only" />
+          <Tag value="No exact address" />
+        </View>
+      </Animated.View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Privacy Shield</Text>
+        <Text style={styles.caption}>Wynik: {security?.privacy_shield_score || 0}/100</Text>
+        {(security?.recommendations || []).map((item: string) => (
+          <View key={item} style={styles.aliasRow}>
+            <Ionicons name="shield-checkmark-outline" size={16} color={theme.neonGreen} />
+            <Text style={styles.caption}>{item}</Text>
+          </View>
+        ))}
+
+        <View style={styles.actionsRow}>
+          <PixelButton label={checking ? "Sprawdzanie..." : "Biometria"} icon="finger-print-outline" onPress={runBiometric} />
+          <PixelButton label="Dodaj passkey" icon="key-outline" variant="secondary" onPress={registerPasskeyDemo} />
+        </View>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>2FA</Text>
+        <TextInput
+          style={styles.input}
+          value={passwordFor2FA}
+          onChangeText={setPasswordFor2FA}
+          secureTextEntry
+          placeholder="Hasło konta"
+          placeholderTextColor={theme.textMuted}
+        />
+        <PixelButton label="Wygeneruj sekret" icon="qr-code-outline" onPress={enable2FA} />
+        {pendingSecret ? <Text style={styles.caption}>Sekret: {pendingSecret}</Text> : null}
+        <TextInput
+          style={styles.input}
+          value={otpCode}
+          onChangeText={setOtpCode}
+          placeholder="Kod z aplikacji TOTP"
+          placeholderTextColor={theme.textMuted}
+        />
+        <PixelButton label="Zweryfikuj 2FA" icon="checkmark-circle-outline" onPress={verify2FA} />
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Urządzenia i sesje</Text>
+        {devices.map((device) => (
+          <View key={device.id} style={styles.sessionRow}>
+            <View>
+              <Text style={styles.caption}>{device.device_name}</Text>
+              <Text style={styles.mutedText}>{device.user_agent?.slice(0, 24) || "Unknown"}</Text>
+            </View>
+            <PixelButton
+              label="Wyloguj"
+              icon="log-out-outline"
+              variant="secondary"
+              onPress={async () => {
+                await apiRequest(`/me/devices/${device.id}`, { method: "DELETE", auth: true });
+                await loadSecurity();
+              }}
+            />
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Panic Lock</Text>
+        <Text style={styles.caption}>Jednym kliknięciem blokujesz konto, wypłaty i nowe transakcje.</Text>
+        <View style={styles.actionsRow}>
+          <PixelButton
+            label="Aktywuj Panic Lock"
+            icon="lock-closed-outline"
+            variant="danger"
+            onPress={async () => {
+              await apiRequest("/me/panic-lock", { method: "POST", auth: true });
+              await logout();
+            }}
+          />
+          <PixelButton label="Wyloguj" icon="exit-outline" variant="secondary" onPress={logout} />
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+function AdminTab() {
+  const [dashboard, setDashboard] = useState<AdminDashboard | null>(null);
+  const [users, setUsers] = useState<any[]>([]);
+  const [listings, setListings] = useState<any[]>([]);
+  const [disputes, setDisputes] = useState<any[]>([]);
+
+  const loadAdmin = async () => {
+    try {
+      const [d, u, l, sp] = await Promise.all([
+        apiRequest<AdminDashboard>("/admin/dashboard", { auth: true }),
+        apiRequest<any[]>("/admin/users", { auth: true }),
+        apiRequest<any[]>("/admin/listings", { auth: true }),
+        apiRequest<any[]>("/admin/disputes", { auth: true }),
+      ]);
+      setDashboard(d);
+      setUsers(u);
+      setListings(l);
+      setDisputes(sp);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Brak dostępu admin");
+    }
+  };
+
+  useEffect(() => {
+    loadAdmin();
+  }, []);
+
+  return (
+    <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 160 }}>
+      <Text style={styles.h2}>Admin Control</Text>
+      <Text style={styles.subtitle}>Moderacja • Spory • Opłaty • Audit</Text>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Dashboard</Text>
+        <Text style={styles.caption}>Użytkownicy: {dashboard?.users || 0}</Text>
+        <Text style={styles.caption}>Oferty: {dashboard?.listings || 0}</Text>
+        <Text style={styles.caption}>Aktywne transakcje: {dashboard?.active_transactions || 0}</Text>
+        <Text style={styles.caption}>Otwarte spory: {dashboard?.open_disputes || 0}</Text>
+        <Text style={styles.caption}>Otwarte zgłoszenia: {dashboard?.open_reports || 0}</Text>
+        <Text style={styles.caption}>Przychód prowizyjny: {dashboard?.commission_revenue_crypto || 0} USDC</Text>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Moderacja ofert</Text>
+        {listings.slice(0, 6).map((listing) => (
+          <View key={listing.id} style={styles.sessionRow}>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.caption}>{listing.title}</Text>
+              <Text style={styles.mutedText}>{listing.status} / {listing.moderation_status}</Text>
+            </View>
+            <PixelButton
+              label="Approve"
+              icon="checkmark-outline"
+              variant="secondary"
+              onPress={async () => {
+                await apiRequest(`/admin/listings/${listing.id}/moderate`, {
+                  method: "POST",
+                  auth: true,
+                  body: { action: "approve", reason: "Przegląd ręczny" },
+                });
+                await loadAdmin();
+              }}
+            />
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Spory</Text>
+        {disputes.slice(0, 5).map((dispute) => (
+          <View key={dispute.id} style={styles.sessionRow}>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.caption}>{dispute.reason}</Text>
+              <Text style={styles.mutedText}>Status: {dispute.status}</Text>
+            </View>
+            {dispute.status === "OPEN" && (
+              <PixelButton
+                label="Refund"
+                icon="return-down-back-outline"
+                variant="danger"
+                onPress={async () => {
+                  await apiRequest(`/admin/disputes/${dispute.id}/resolve`, {
+                    method: "POST",
+                    auth: true,
+                    body: { decision: "refund_buyer", reason: "Decyzja admina" },
+                  });
+                  await loadAdmin();
+                }}
+              />
+            )}
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.cardTitle}>Użytkownicy wysokiego ryzyka</Text>
+        {users.filter((u) => (u.risk_score || 0) > 70).slice(0, 5).map((u) => (
+          <View key={u.id} style={styles.sessionRow}>
+            <View>
+              <Text style={styles.caption}>{u.display_alias}</Text>
+              <Text style={styles.mutedText}>Risk: {u.risk_score}</Text>
+            </View>
+            <PixelButton
+              label="Ban"
+              icon="ban-outline"
+              variant="danger"
+              onPress={async () => {
+                await apiRequest(`/admin/users/${u.id}/ban`, { method: "POST", auth: true });
+                await loadAdmin();
+              }}
+            />
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+export default function Index() {
+  const { user, ready } = useAuth();
+  const insets = useSafeAreaInsets();
+  const [tab, setTab] = useState<TabKey>("market");
+
+  const doBuy = async (listing: Listing) => {
+    try {
+      const tx = await apiRequest<Transaction>("/transactions", {
+        method: "POST",
+        auth: true,
+        body: { listing_id: listing.id },
+      });
+      Alert.alert("Deal Room utworzony", `Alias kupującego: ${tx.buyer_alias}\nAlias sprzedającego: ${tx.seller_alias}`);
+      setTab("deals");
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się utworzyć transakcji");
+    }
+  };
+
+  const tabs = useMemo(
+    () => [
+      { key: "market" as const, label: "Market", icon: "planet-outline" as const },
+      { key: "sell" as const, label: "Sprzedaj", icon: "add-circle-outline" as const },
+      { key: "deals" as const, label: "Deal Room", icon: "chatbubbles-outline" as const },
+      { key: "profile" as const, label: "Profil", icon: "shield-checkmark-outline" as const },
+      ...(user?.role === "admin"
+        ? [{ key: "admin" as const, label: "Admin", icon: "settings-outline" as const }]
+        : []),
+    ],
+    [user?.role],
+  );
+
+  if (!ready) {
+    return (
+      <View style={styles.loaderWrap}>
+        <ActivityIndicator size="large" color={theme.neonBlue} />
+      </View>
+    );
+  }
+
+  if (!user) return <AuthScreen />;
+
+  return (
+    <LinearGradient colors={["#05070f", "#0b1130", "#11081e"]} style={styles.container}>
+      <SafeAreaView style={styles.container}>
+        <View style={[styles.mainBody, { paddingTop: 14 }]}> 
+          {tab === "market" ? <MarketplaceTab onBuy={doBuy} /> : null}
+          {tab === "sell" ? <SellTab /> : null}
+          {tab === "deals" ? <DealsTab /> : null}
+          {tab === "profile" ? <ProfileTab /> : null}
+          {tab === "admin" ? <AdminTab /> : null}
+        </View>
+
+        <View style={[styles.navBar, { paddingBottom: Math.max(10, insets.bottom) }]}> 
+          {tabs.map((entry) => (
+            <Pressable key={entry.key} onPress={() => setTab(entry.key)} style={styles.navBtn}>
+              <Ionicons
+                name={entry.icon}
+                size={20}
+                color={tab === entry.key ? theme.neonGreen : theme.textMuted}
+              />
+              <Text style={[styles.navLabel, tab === entry.key && { color: theme.neonGreen }]}>{entry.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </SafeAreaView>
+    </LinearGradient>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.bg,
+  },
+  loaderWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.bg,
+  },
+  mainBody: {
+    flex: 1,
+    paddingHorizontal: 18,
+  },
+  authWrap: {
+    flex: 1,
+    paddingHorizontal: 18,
+    justifyContent: "center",
+    gap: 16,
+  },
+  logoWrap: {
+    gap: 8,
+    marginBottom: 8,
+  },
+  h1: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: theme.text,
+  },
+  h2: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: theme.text,
+    marginBottom: 6,
+  },
+  subtitle: {
+    color: theme.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  panel: {
+    backgroundColor: theme.panel,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 10,
+  },
+  panelSoft: {
+    backgroundColor: theme.panelSoft,
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 8,
+  },
+  input: {
+    minHeight: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+    color: theme.text,
+    paddingHorizontal: 12,
+    backgroundColor: "#0d1325",
+    fontSize: 15,
+  },
+  button: {
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  buttonText: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  segmentRow: {
+    flexDirection: "row",
+    gap: 8,
+    backgroundColor: theme.panel,
+    borderRadius: 12,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  segmentBtn: {
+    flex: 1,
+    borderRadius: 10,
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  segmentBtnActive: {
+    backgroundColor: "#11224e",
+  },
+  segmentText: {
+    color: theme.textMuted,
+    fontWeight: "600",
+  },
+  segmentTextActive: {
+    color: theme.neonBlue,
+  },
+  tabContent: {
+    flex: 1,
+    gap: 12,
+  },
+  rowBetween: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  rowWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  filterRow: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 999,
+    minHeight: 34,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    backgroundColor: "#0f1731",
+  },
+  filterChipActive: {
+    borderColor: theme.neonGreen,
+    backgroundColor: "#10233a",
+  },
+  filterText: {
+    color: theme.text,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  cardTitle: {
+    color: theme.text,
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  cardBody: {
+    color: theme.text,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  tag: {
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 999,
+    minHeight: 28,
+    paddingHorizontal: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f1935",
+  },
+  tagText: {
+    color: theme.neonBlue,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  aliasRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  caption: {
+    color: theme.text,
+    fontSize: 12,
+  },
+  mutedText: {
+    color: theme.textMuted,
+    fontSize: 12,
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  emptyText: {
+    color: theme.textMuted,
+    textAlign: "center",
+    marginTop: 30,
+  },
+  messageBubble: {
+    backgroundColor: "#0c1734",
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 10,
+    padding: 9,
+    gap: 6,
+  },
+  messageText: {
+    color: theme.text,
+    fontSize: 14,
+  },
+  sessionRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  navBar: {
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+    backgroundColor: "#090d18",
+    paddingTop: 8,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  navBtn: {
+    flex: 1,
+    minHeight: 52,
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 12,
+    gap: 2,
+  },
+  navLabel: {
+    color: theme.textMuted,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+});
