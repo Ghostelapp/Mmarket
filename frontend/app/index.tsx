@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,6 +17,9 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useFonts } from "expo-font";
+import { PressStart2P_400Regular } from "@expo-google-fonts/press-start-2p";
+import { VT323_400Regular } from "@expo-google-fonts/vt323";
 
 import { useAuth } from "@/src/context/AuthContext";
 import { theme } from "@/src/constants/theme";
@@ -39,6 +43,9 @@ const categories = [
 
 const base64PixelBlue =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+const pixelHeroImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAACqUlEQVR42u2av0vDQBTHX0ujGCitDg52qAWRiuCoiENn/wLB3dFZqLP9Bzq6K/0jBDuJqyDt5uTioEihUgV1iJQz9yOXS95rm74b5O71crn3ue99LwnmykubwEVf8oyAATEgBsSAGBADymop+IUyU2AFJVAQ3tAL+Q/KTD6/l1hB2VKQYUmfB/duY1aKe8SAcmvFXcr7OaOZFCZEQOxB8+FB5fw6wW0e3zsYw26XjsZ1H2et87NLB3VkilNsCL2gUivtECyDD1vsQdl6DvJhi2ALyGbECsqKgobQo3Ef9qCMPgc9vnUoMzlYPmMFZcuDKA0IANbgkBWULQU9vT+wB7GC2INYIxEKqnobSENX4fTq5YQmjePVy5l8F8ObN9ldED3obtQGgFqpjU5oBACwv3jKHpStU0xcUiQzItjCRArCyITG4NA9SHgsStuMRlrBsgfRlRxc3zAFE6Bm5RYAWv0GADTrXfE3ZdAcl4O6eKvf+CmqJjQAXTz5HWOl88+Dgp9DXZVBMR4atFnv6mYsl2a9mxv8db54bui6nVe6BhDKoqMTF80/BUVepgvaT2WqgjZotKeYWU0hKSn1lVBcKcrEfl1jH/M6TPbgIidh2c0yHyUdZ+HwKRbzFLNUdQi/MmJoOnRIPqaDahwBuUFxyAdvNBdAnufyn2tfr0MA8FZ8y+a4jtc0z4H6XSy48XgSumZQ8VZ8MZNQM9aqGOikjiaRgsxqiqxbdkt4Ob+LkZxiyRWkE5SoLOUim4OxLklxT6F/DwpNWq6MPcjSjJTs5DWYsQ9mciZikg4+bZbYLG0x3aaTj7CgomxG9sEWDsUnV6WaxL8yDqVqRChkwuFTbJq2mHnThXafXBdlOC+ADJgMm3TuANlgmiCaaQGkwzRxNNMFCOM9M5XyC133SEKfnMOXAAAAAElFTkSuQmCC";
+const pixelAvatarA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAAzUlEQVR42u2YwQqDMBBEp0FQUfBg7vb/vy231lpP7WEhiEqySaPBspLDYNTnbOIsiL4b8PjQOFPf+m6Y3k8AAOqqPUe/jFHIdAj4/8FFxD3jbEjo6k66KfWxji2SeT6NY/t0669GS5qmxtnwrasfva5ehW89rNQRa5kA7KUuyy7fsYBDwN5dE5RiaZLrQMduH9tQSxmZTaltNK6aRES8KG9tLYyzxsvrL96Ptx3JrSVABCxgAedPrt3G4NCXdUzxy8znXS2bKzsYuX43fQEhdPNsCWNwiAAAAABJRU5ErkJggg==";
+const pixelAvatarB = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAArUlEQVR42u2XPQqAMAyFGxEUHBx09wje/xjew1XQKQ5CBwshqWKCTcb+hZeveaUw9FPQCMCAXTN+nHU71ioohVpicMZfRZ2xZ97hNrK0+EfGUWiqj5h6ypg+Og6mFN7pY0KQFLNtxlcBOZqYK92rLfYxBx7/KogZE23K72AZY9oipM5lmLG0gEwvM/8eS32YUyfbjPMUG2XsXu2MC2VckldnfIr8f2yNMWBAlcQnEwN0jlIzfBsAAAAASUVORK5CYII=";
 
 const base64UrlToBuffer = (value: string): ArrayBuffer => {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -103,6 +110,10 @@ function PixelButton({
 }) {
   const color =
     variant === "danger" ? theme.danger : variant === "secondary" ? theme.textMuted : theme.neonBlue;
+  const backgroundColor =
+    variant === "primary" ? theme.neonBlue : variant === "danger" ? "rgba(255,93,121,0.14)" : "rgba(0,243,255,0.08)";
+  const labelColor = variant === "primary" ? theme.bg : color;
+
   return (
     <Pressable
       testID={testID}
@@ -110,11 +121,19 @@ function PixelButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
-        { borderColor: color, opacity: pressed || disabled ? 0.72 : 1 },
+        {
+          borderColor: color,
+          backgroundColor,
+          opacity: pressed || disabled ? 0.82 : 1,
+          transform: [{ scale: pressed ? 0.98 : 1 }],
+          shadowColor: color,
+          shadowOpacity: pressed ? 0.12 : 0.2,
+          shadowRadius: pressed ? 3 : 6,
+        },
       ]}
     >
-      <Ionicons name={icon} size={16} color={color} />
-      <Text style={[styles.buttonText, { color }]}>{label}</Text>
+      <Ionicons name={icon} size={14} color={labelColor} />
+      <Text style={[styles.buttonText, { color: labelColor }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -193,13 +212,14 @@ function AuthScreen() {
   };
 
   return (
-    <LinearGradient colors={["#05070f", "#0b1130", "#11081e"]} style={styles.container}>
+    <LinearGradient colors={["#050509", "#180b2c", "#0b1022"]} style={styles.container}>
       <SafeAreaView style={styles.container}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.container}
         >
           <View style={styles.authWrap}>
+            <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
             <View style={styles.logoWrap}>
               <MaterialCommunityIcons name="shield-lock-outline" size={34} color={theme.neonGreen} />
               <Text style={styles.h1}>MASK Market</Text>
@@ -325,6 +345,7 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
 
   return (
     <View style={styles.tabContent}>
+      <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
       <Text style={styles.h2}>Marketplace</Text>
       <Text style={styles.subtitle}>Privacy-first P2P • Crypto-only • Escrow-first</Text>
 
@@ -541,6 +562,7 @@ function SellTab() {
 
   return (
     <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 140 }}>
+      <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
       <Text style={styles.h2}>Dodaj ofertę</Text>
       <Text style={styles.subtitle}>Listing fee w crypto aktywuje publikację</Text>
       <View style={styles.panel}>
@@ -681,6 +703,7 @@ function DealsTab() {
 
   return (
     <View style={styles.tabContent}>
+      <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
       <Text style={styles.h2}>Deal Room</Text>
       <Text style={styles.subtitle}>Alias transakcyjne • E2EE chat • Escrow status</Text>
 
@@ -779,6 +802,13 @@ function DealsTab() {
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
               {messages.map((msg) => (
                 <View key={msg.id} style={styles.messageBubble}>
+                  <View style={styles.aliasRow}>
+                    <Image
+                      source={{ uri: msg.sender_id === selected.buyer_id ? pixelAvatarA : pixelAvatarB }}
+                      style={styles.pixelAvatar}
+                    />
+                    <Text style={styles.caption}>{msg.sender_id === selected.buyer_id ? "Kupujący" : "Sprzedający"}</Text>
+                  </View>
                   <Text style={styles.messageText}>{e2eeDecrypt(msg.ciphertext, msg.nonce, selected.deal_room_id)}</Text>
                   <Text style={styles.caption}>{new Date(msg.created_at).toLocaleString()}</Text>
                 </View>
@@ -934,6 +964,7 @@ function ProfileTab() {
 
   return (
     <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 160 }}>
+      <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
       <Text style={styles.h2}>Profil i bezpieczeństwo</Text>
       <Text style={styles.subtitle}>Trust without identity • Privacy Shield • Panic Lock</Text>
 
@@ -1149,6 +1180,10 @@ function AdminTab() {
 }
 
 export default function Index() {
+  const [fontsLoaded] = useFonts({
+    PressStart2P_400Regular,
+    VT323_400Regular,
+  });
   const { user, ready } = useAuth();
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<TabKey>("market");
@@ -1180,7 +1215,7 @@ export default function Index() {
     [user?.role],
   );
 
-  if (!ready) {
+  if (!ready || !fontsLoaded) {
     return (
       <View style={styles.loaderWrap}>
         <ActivityIndicator size="large" color={theme.neonBlue} />
@@ -1191,7 +1226,7 @@ export default function Index() {
   if (!user) return <AuthScreen />;
 
   return (
-    <LinearGradient colors={["#05070f", "#0b1130", "#11081e"]} style={styles.container}>
+    <LinearGradient colors={["#050509", "#180b2c", "#0b1022"]} style={styles.container}>
       <SafeAreaView style={styles.container}>
         <View style={[styles.mainBody, { paddingTop: 14 }]}> 
           {tab === "market" ? <MarketplaceTab onBuy={doBuy} /> : null}
@@ -1237,57 +1272,68 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 18,
     justifyContent: "center",
-    gap: 16,
+    gap: 14,
   },
   logoWrap: {
     gap: 8,
     marginBottom: 8,
   },
   h1: {
-    fontSize: 32,
-    fontWeight: "800",
+    fontSize: 24,
+    fontFamily: "PressStart2P_400Regular",
     color: theme.text,
+    textTransform: "uppercase",
+    textShadowColor: theme.neonViolet,
+    textShadowRadius: 6,
   },
   h2: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 18,
+    fontFamily: "PressStart2P_400Regular",
     color: theme.text,
     marginBottom: 6,
+    textTransform: "uppercase",
+    textShadowColor: theme.neonBlue,
+    textShadowRadius: 4,
   },
   subtitle: {
     color: theme.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
+    lineHeight: 24,
   },
   panel: {
     backgroundColor: theme.panel,
-    borderRadius: 18,
+    borderRadius: 5,
     padding: 14,
     borderWidth: 1,
     borderColor: theme.border,
     gap: 10,
+    shadowColor: theme.neonBlue,
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
   },
   panelSoft: {
     backgroundColor: theme.panelSoft,
-    borderRadius: 14,
+    borderRadius: 4,
     padding: 10,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: theme.borderGlow,
     gap: 8,
   },
   input: {
     minHeight: 46,
-    borderRadius: 12,
+    borderRadius: 4,
     borderWidth: 1,
     borderColor: theme.border,
     color: theme.text,
     paddingHorizontal: 12,
-    backgroundColor: "#0d1325",
-    fontSize: 15,
+    backgroundColor: theme.inputBg,
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
   },
   button: {
     minHeight: 44,
-    borderRadius: 12,
+    borderRadius: 3,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
@@ -1296,31 +1342,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   buttonText: {
-    fontSize: 14,
-    fontWeight: "700",
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
+    textTransform: "uppercase",
   },
   segmentRow: {
     flexDirection: "row",
     gap: 8,
     backgroundColor: theme.panel,
-    borderRadius: 12,
+    borderRadius: 4,
     padding: 6,
     borderWidth: 1,
     borderColor: theme.border,
   },
   segmentBtn: {
     flex: 1,
-    borderRadius: 10,
+    borderRadius: 2,
     minHeight: 42,
     alignItems: "center",
     justifyContent: "center",
   },
   segmentBtnActive: {
-    backgroundColor: "#11224e",
+    backgroundColor: "#2d0f44",
   },
   segmentText: {
     color: theme.textMuted,
-    fontWeight: "600",
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
   },
   segmentTextActive: {
     color: theme.neonBlue,
@@ -1347,45 +1395,47 @@ const styles = StyleSheet.create({
   filterChip: {
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 999,
+    borderRadius: 4,
     minHeight: 34,
     justifyContent: "center",
     paddingHorizontal: 12,
-    backgroundColor: "#0f1731",
+    backgroundColor: "#111827",
   },
   filterChipActive: {
-    borderColor: theme.neonGreen,
-    backgroundColor: "#10233a",
+    borderColor: theme.neonViolet,
+    backgroundColor: "#2c1541",
   },
   filterText: {
     color: theme.text,
-    fontSize: 12,
-    fontWeight: "600",
+    fontFamily: "VT323_400Regular",
+    fontSize: 22,
   },
   cardTitle: {
     color: theme.text,
-    fontSize: 18,
-    fontWeight: "700",
+    fontFamily: "PressStart2P_400Regular",
+    fontSize: 13,
+    textTransform: "uppercase",
   },
   cardBody: {
     color: theme.text,
-    fontSize: 14,
-    lineHeight: 20,
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
+    lineHeight: 24,
   },
   tag: {
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 999,
+    borderRadius: 3,
     minHeight: 28,
     paddingHorizontal: 10,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0f1935",
+    backgroundColor: "#100f1b",
   },
   tagText: {
     color: theme.neonBlue,
-    fontSize: 11,
-    fontWeight: "700",
+    fontFamily: "VT323_400Regular",
+    fontSize: 19,
   },
   aliasRow: {
     flexDirection: "row",
@@ -1394,11 +1444,13 @@ const styles = StyleSheet.create({
   },
   caption: {
     color: theme.text,
-    fontSize: 12,
+    fontFamily: "VT323_400Regular",
+    fontSize: 22,
   },
   mutedText: {
     color: theme.textMuted,
-    fontSize: 12,
+    fontFamily: "VT323_400Regular",
+    fontSize: 21,
   },
   actionsRow: {
     flexDirection: "row",
@@ -1407,20 +1459,23 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     color: theme.textMuted,
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
     textAlign: "center",
     marginTop: 30,
   },
   messageBubble: {
-    backgroundColor: "#0c1734",
+    backgroundColor: "#090d18",
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 10,
+    borderRadius: 4,
     padding: 9,
     gap: 6,
   },
   messageText: {
     color: theme.text,
-    fontSize: 14,
+    fontFamily: "VT323_400Regular",
+    fontSize: 24,
   },
   sessionRow: {
     flexDirection: "row",
@@ -1431,7 +1486,7 @@ const styles = StyleSheet.create({
   navBar: {
     borderTopWidth: 1,
     borderTopColor: theme.border,
-    backgroundColor: "#090d18",
+    backgroundColor: theme.navBg,
     paddingTop: 8,
     paddingHorizontal: 8,
     flexDirection: "row",
@@ -1443,12 +1498,27 @@ const styles = StyleSheet.create({
     minHeight: 52,
     justifyContent: "center",
     alignItems: "center",
-    borderRadius: 12,
+    borderRadius: 4,
     gap: 2,
   },
   navLabel: {
     color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: "700",
+    fontFamily: "VT323_400Regular",
+    fontSize: 18,
+  },
+  pixelHero: {
+    width: "100%",
+    height: 84,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: theme.borderGlow,
+    marginBottom: 8,
+  },
+  pixelAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
 });
