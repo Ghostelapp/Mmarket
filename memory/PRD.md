@@ -35,6 +35,11 @@ Zbudować legalny privacy-first marketplace P2P crypto-only z escrow, E2EE, alia
 - Smart contract: `smart_contract_escrow.sol` with create/fund/ship/confirm/openDispute/resolve/cancel and fee split
 - Security hardening: JWT secret fail-fast from env, removed admin credential prefill in web panel
 - QA closure: added testID coverage to key mobile controls and working `/admin` fallback route in Expo preview
+- WebAuthn upgrade: pełne challenge/options/verify (`/auth/passkey/register/options`, `/auth/passkey/register`, `/auth/passkey/login/options`, `/auth/passkey/login`)
+- On-chain architecture: Alchemy RPC + webhook endpoint (`/crypto/webhooks/alchemy`) z podpisem HMAC; fallback mode gdy klucze ENV nieustawione
+- Promotions: pakiety Basic/Boost z crypto payment intent + confirm (`/listings/{id}/promote-intent`, `/listings/{id}/promote-confirm`)
+- Upload pipeline: `POST /listings/{id}/images/upload` z EXIF-safe processing, thumbnail, AV feature flag, private R2 integration (feature flag)
+- Stabilizacja marketplace: fix timezone compare dla promoted sorting w `/listings`
 
 ## Prioritized backlog
 ### P0
@@ -54,7 +59,7 @@ Zbudować legalny privacy-first marketplace P2P crypto-only z escrow, E2EE, alia
 - Expanded analytics and exports PDF/CSV UI
 
 ## Next tasks list
-1. Podpiąć real provider on-chain i indexer eventów escrow
-2. Dodać produkcyjny WebAuthn passkey i rotację kluczy
-3. Dodać pipeline plików (EXIF strip, AV scan, thumbnails)
-4. Rozszerzyć testy automatyczne e2e (mobile + admin)
+1. Uzupełnić realne klucze Alchemy i włączyć `ENABLE_ONCHAIN_INDEXER=true`
+2. Uzupełnić klucze Cloudflare R2 i włączyć `ENABLE_R2_STORAGE=true`
+3. Włączyć ClamAV serwis i `ENABLE_AV_SCAN=true`
+4. Dodać produkcyjne originy WebAuthn do `WEBAUTHN_ALLOWED_ORIGINS`

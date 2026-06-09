@@ -615,6 +615,24 @@ def normalize_network_label(raw: str) -> Optional[str]:
     return None
 
 
+def normalize_datetime_for_compare(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
 async def activate_listing_after_fee(listing: dict):
     moderation_status = "PENDING" if listing.get("risk_score", 0) > 70 else "APPROVED"
     status = "ACTIVE" if moderation_status == "APPROVED" else "UNDER_REVIEW"
@@ -1383,8 +1401,9 @@ async def listings_list(
     items = await db.listings.find(filters, {"_id": 0}).to_list(200)
     for item in items:
         promotion = item.get("promotion", {})
+        promo_end = normalize_datetime_for_compare(promotion.get("ends_at"))
         item["is_promoted"] = bool(
-            promotion.get("is_promoted") and promotion.get("ends_at") and promotion.get("ends_at") > now_utc()
+            promotion.get("is_promoted") and promo_end and promo_end > now_utc()
         )
         seller = await db.users.find_one(
             {"id": item["seller_id"]},
