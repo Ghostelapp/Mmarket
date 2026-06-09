@@ -24,7 +24,9 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "mask-market-dev-secret-change-me")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET must be set in backend environment")
 JWT_ALG = "HS256"
 ACCESS_TTL_MIN = 20
 REFRESH_TTL_DAYS = 14

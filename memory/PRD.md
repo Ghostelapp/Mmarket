@@ -33,6 +33,8 @@ Zbudować legalny privacy-first marketplace P2P crypto-only z escrow, E2EE, alia
 - Mobile Expo: E2EE client-side encrypt/decrypt helper for deal room chat
 - Admin web Next.js: login + dashboard + moderation + dispute actions + wallets + audit log views
 - Smart contract: `smart_contract_escrow.sol` with create/fund/ship/confirm/openDispute/resolve/cancel and fee split
+- Security hardening: JWT secret fail-fast from env, removed admin credential prefill in web panel
+- QA closure: added testID coverage to key mobile controls and working `/admin` fallback route in Expo preview
 
 ## Prioritized backlog
 ### P0

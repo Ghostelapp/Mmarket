@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8001";
+const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
 
 async function request(path: string, token: string, method: string = "GET", body?: unknown) {
+  if (!backendUrl) throw new Error("Brak NEXT_PUBLIC_BACKEND_URL");
   const response = await fetch(`${backendUrl}/api${path}`, {
     method,
     headers: {
@@ -19,8 +20,8 @@ async function request(path: string, token: string, method: string = "GET", body
 }
 
 export default function AdminPage() {
-  const [email, setEmail] = useState("admin@maskmarket.io");
-  const [password, setPassword] = useState("MaskAdmin!2026");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [token, setToken] = useState("");
   const [dashboard, setDashboard] = useState<any>(null);
@@ -54,6 +55,9 @@ export default function AdminPage() {
   const login = async () => {
     try {
       setError("");
+      if (!backendUrl) {
+        throw new Error("Brak NEXT_PUBLIC_BACKEND_URL");
+      }
       const response = await fetch(`${backendUrl}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -78,7 +82,7 @@ export default function AdminPage() {
         <h1 className="title">MASK Admin</h1>
         <p className="subtitle">Panel administracyjny: moderacja, escrow, spory, audyt.</p>
         <div className="panel grid" style={{ maxWidth: 420 }}>
-          <input className="input" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input className="input" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
           <input className="input" placeholder="Hasło" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           <input className="input" placeholder="Kod 2FA (jeśli aktywny)" value={otp} onChange={(e) => setOtp(e.target.value)} />
           <button className="btn" onClick={login}>Zaloguj jako admin</button>

@@ -59,17 +59,20 @@ function PixelButton({
   onPress,
   variant = "primary",
   disabled = false,
+  testID,
 }: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   variant?: "primary" | "secondary" | "danger";
   disabled?: boolean;
+  testID?: string;
 }) {
   const color =
     variant === "danger" ? theme.danger : variant === "secondary" ? theme.textMuted : theme.neonBlue;
   return (
     <Pressable
+      testID={testID}
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -146,6 +149,7 @@ function AuthScreen() {
 
             <View style={styles.panel}>
               <TextInput
+                testID="auth-email"
                 style={styles.input}
                 value={email}
                 onChangeText={setEmail}
@@ -155,6 +159,7 @@ function AuthScreen() {
                 placeholderTextColor={theme.textMuted}
               />
               <TextInput
+                testID="auth-password"
                 style={styles.input}
                 value={password}
                 onChangeText={setPassword}
@@ -166,6 +171,7 @@ function AuthScreen() {
               {mode === "register" && (
                 <>
                   <TextInput
+                    testID="auth-alias"
                     style={styles.input}
                     value={alias}
                     onChangeText={setAlias}
@@ -173,6 +179,7 @@ function AuthScreen() {
                     placeholderTextColor={theme.textMuted}
                   />
                   <TextInput
+                    testID="auth-location"
                     style={styles.input}
                     value={location}
                     onChangeText={setLocation}
@@ -184,6 +191,7 @@ function AuthScreen() {
 
               {mode === "login" && (
                 <TextInput
+                  testID="auth-otp"
                   style={styles.input}
                   value={otp}
                   onChangeText={setOtp}
@@ -193,6 +201,7 @@ function AuthScreen() {
               )}
 
               <PixelButton
+                testID="auth-submit"
                 label={busy ? "Przetwarzanie..." : mode === "login" ? "Zaloguj" : "Załóż konto"}
                 icon="log-in-outline"
                 onPress={onSubmit}
@@ -238,6 +247,7 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
 
       <View style={styles.panel}>
         <TextInput
+          testID="market-search"
           style={styles.input}
           placeholder="Szukaj po tytule/opisie"
           placeholderTextColor={theme.textMuted}
@@ -258,7 +268,7 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
             </Pressable>
           ))}
         </ScrollView>
-        <PixelButton label="Odśwież" icon="refresh-outline" onPress={fetchListings} />
+        <PixelButton testID="market-refresh" label="Odśwież" icon="refresh-outline" onPress={fetchListings} />
       </View>
 
       {loading ? (
@@ -290,8 +300,9 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
               </View>
 
               <View style={styles.actionsRow}>
-                <PixelButton label="Kup teraz" icon="flash-outline" onPress={() => onBuy(item)} />
+                <PixelButton testID={`buy-now-${item.id}`} label="Kup teraz" icon="flash-outline" onPress={() => onBuy(item)} />
                 <PixelButton
+                  testID={`report-listing-${item.id}`}
                   label="Zgłoś"
                   icon="warning-outline"
                   variant="secondary"
@@ -394,8 +405,9 @@ function SellTab() {
       <Text style={styles.h2}>Dodaj ofertę</Text>
       <Text style={styles.subtitle}>Listing fee w crypto aktywuje publikację</Text>
       <View style={styles.panel}>
-        <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Tytuł" placeholderTextColor={theme.textMuted} />
+        <TextInput testID="sell-title" style={styles.input} value={title} onChangeText={setTitle} placeholder="Tytuł" placeholderTextColor={theme.textMuted} />
         <TextInput
+          testID="sell-description"
           style={[styles.input, { minHeight: 88 }]}
           value={description}
           onChangeText={setDescription}
@@ -404,6 +416,7 @@ function SellTab() {
           multiline
         />
         <TextInput
+          testID="sell-price"
           style={styles.input}
           value={price}
           onChangeText={setPrice}
@@ -429,16 +442,16 @@ function SellTab() {
           ))}
         </ScrollView>
 
-        <TextInput style={styles.input} value={condition} onChangeText={setCondition} placeholder="Stan" placeholderTextColor={theme.textMuted} />
-        <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="Lokalizacja" placeholderTextColor={theme.textMuted} />
+        <TextInput testID="sell-condition" style={styles.input} value={condition} onChangeText={setCondition} placeholder="Stan" placeholderTextColor={theme.textMuted} />
+        <TextInput testID="sell-location" style={styles.input} value={location} onChangeText={setLocation} placeholder="Lokalizacja" placeholderTextColor={theme.textMuted} />
 
-        <PixelButton label={busy ? "Przetwarzanie..." : "Utwórz ofertę"} icon="add-circle-outline" onPress={createListing} disabled={busy} />
+        <PixelButton testID="sell-create" label={busy ? "Przetwarzanie..." : "Utwórz ofertę"} icon="add-circle-outline" onPress={createListing} disabled={busy} />
 
         {feeInfo && (
           <View style={[styles.panelSoft, { marginTop: 10 }]}> 
             <Text style={styles.caption}>Opłata za wystawienie: {feeInfo.amount} {feeInfo.token}</Text>
             <Text style={styles.caption}>Sieć: {feeInfo.network}</Text>
-            <PixelButton label="Opłać listing fee" icon="wallet-outline" onPress={payListingFee} disabled={busy} />
+            <PixelButton testID="sell-pay-listing-fee" label="Opłać listing fee" icon="wallet-outline" onPress={payListingFee} disabled={busy} />
           </View>
         )}
       </View>
@@ -564,6 +577,7 @@ function DealsTab() {
 
             <View style={styles.actionsRow}>
               <PixelButton
+                testID="deal-fund-escrow"
                 label="Fund escrow"
                 icon="wallet-outline"
                 variant="secondary"
@@ -577,6 +591,7 @@ function DealsTab() {
                 }
               />
               <PixelButton
+                testID="deal-mark-shipped"
                 label="Mark shipped"
                 icon="cube-outline"
                 variant="secondary"
@@ -591,11 +606,13 @@ function DealsTab() {
 
             <View style={styles.actionsRow}>
               <PixelButton
+                testID="deal-confirm-delivery"
                 label="Confirm delivery"
                 icon="checkmark-done-outline"
                 onPress={() => callAction("/confirm-delivery")}
               />
               <PixelButton
+                testID="deal-open-dispute"
                 label="Open dispute"
                 icon="alert-circle-outline"
                 variant="danger"
@@ -616,6 +633,7 @@ function DealsTab() {
               ))}
             </ScrollView>
             <TextInput
+              testID="deal-message-input"
               style={styles.input}
               value={messageText}
               onChangeText={setMessageText}
@@ -623,8 +641,9 @@ function DealsTab() {
               placeholderTextColor={theme.textMuted}
             />
             <View style={styles.actionsRow}>
-              <PixelButton label="Wyślij" icon="send-outline" onPress={sendMessage} />
+              <PixelButton testID="deal-send-message" label="Wyślij" icon="send-outline" onPress={sendMessage} />
               <PixelButton
+                testID="deal-report-evidence"
                 label="Zgłoś dowód"
                 icon="flag-outline"
                 variant="secondary"
@@ -774,6 +793,7 @@ function ProfileTab() {
       <View style={styles.panel}>
         <Text style={styles.cardTitle}>2FA</Text>
         <TextInput
+          testID="profile-2fa-password"
           style={styles.input}
           value={passwordFor2FA}
           onChangeText={setPasswordFor2FA}
@@ -781,16 +801,17 @@ function ProfileTab() {
           placeholder="Hasło konta"
           placeholderTextColor={theme.textMuted}
         />
-        <PixelButton label="Wygeneruj sekret" icon="qr-code-outline" onPress={enable2FA} />
+        <PixelButton testID="profile-2fa-generate" label="Wygeneruj sekret" icon="qr-code-outline" onPress={enable2FA} />
         {pendingSecret ? <Text style={styles.caption}>Sekret: {pendingSecret}</Text> : null}
         <TextInput
+          testID="profile-2fa-otp"
           style={styles.input}
           value={otpCode}
           onChangeText={setOtpCode}
           placeholder="Kod z aplikacji TOTP"
           placeholderTextColor={theme.textMuted}
         />
-        <PixelButton label="Zweryfikuj 2FA" icon="checkmark-circle-outline" onPress={verify2FA} />
+        <PixelButton testID="profile-2fa-verify" label="Zweryfikuj 2FA" icon="checkmark-circle-outline" onPress={verify2FA} />
       </View>
 
       <View style={styles.panel}>
@@ -819,6 +840,7 @@ function ProfileTab() {
         <Text style={styles.caption}>Jednym kliknięciem blokujesz konto, wypłaty i nowe transakcje.</Text>
         <View style={styles.actionsRow}>
           <PixelButton
+            testID="profile-panic-lock"
             label="Aktywuj Panic Lock"
             icon="lock-closed-outline"
             variant="danger"
@@ -827,7 +849,7 @@ function ProfileTab() {
               await logout();
             }}
           />
-          <PixelButton label="Wyloguj" icon="exit-outline" variant="secondary" onPress={logout} />
+          <PixelButton testID="profile-logout" label="Wyloguj" icon="exit-outline" variant="secondary" onPress={logout} />
         </View>
       </View>
     </ScrollView>
