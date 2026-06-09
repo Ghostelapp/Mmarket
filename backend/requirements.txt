@@ -12,6 +12,7 @@ bcrypt==4.1.3
 black==26.5.1
 boto3==1.43.21
 botocore==1.43.21
+cbor2==6.1.2
 certifi==2026.5.20
 cffi==2.0.0
 charset-normalizer==3.4.7
@@ -87,6 +88,7 @@ pyflakes==3.4.0
 Pygments==2.20.0
 PyJWT==2.13.0
 pymongo==4.5.0
+pyOpenSSL==26.2.0
 pyotp==2.9.0
 pyparsing==3.3.2
 pytest==9.0.3
@@ -122,6 +124,7 @@ uritemplate==4.2.0
 urllib3==2.7.0
 uvicorn==0.25.0
 watchfiles==1.2.0
+webauthn==2.7.1
 websockets==16.0
 yarl==1.24.2
 zipp==4.1.0

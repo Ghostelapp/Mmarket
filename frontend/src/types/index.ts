@@ -29,6 +29,17 @@ export type Listing = {
   location_public: string;
   status: string;
   moderation_status: string;
+  promotion?: {
+    is_promoted: boolean;
+    package_type: "basic" | "boost" | null;
+    package_label: string | null;
+    amount_usdc: number;
+    network: "Base" | "Polygon" | null;
+    tx_hash: string | null;
+    starts_at: string | null;
+    ends_at: string | null;
+  };
+  is_promoted?: boolean;
   listing_fee: {
     amount: number;
     token: string;

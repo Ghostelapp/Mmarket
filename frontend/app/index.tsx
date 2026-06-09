@@ -40,6 +40,39 @@ const categories = [
 const base64PixelBlue =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
+const base64UrlToBuffer = (value: string): ArrayBuffer => {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/");
+  const normalized = padded + "=".repeat((4 - (padded.length % 4)) % 4);
+  const binary = atob(normalized);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return bytes.buffer;
+};
+
+const toBase64Url = (buffer: ArrayBuffer): string =>
+  btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+const adaptRegistrationOptions = (publicKey: any) => ({
+  ...publicKey,
+  challenge: base64UrlToBuffer(publicKey.challenge),
+  user: {
+    ...publicKey.user,
+    id: base64UrlToBuffer(publicKey.user.id),
+  },
+  excludeCredentials: (publicKey.excludeCredentials || []).map((item: any) => ({
+    ...item,
+    id: base64UrlToBuffer(item.id),
+  })),
+});
+
+const adaptLoginOptions = (publicKey: any) => ({
+  ...publicKey,
+  challenge: base64UrlToBuffer(publicKey.challenge),
+  allowCredentials: (publicKey.allowCredentials || []).map((item: any) => ({
+    ...item,
+    id: base64UrlToBuffer(item.id),
+  })),
+});
+
 type TabKey = "market" | "sell" | "deals" | "profile" | "admin";
 
 type AdminDashboard = {
@@ -95,7 +128,7 @@ function Tag({ value }: { value: string }) {
 }
 
 function AuthScreen() {
-  const { register, login } = useAuth();
+  const { register, login, loginWithPasskey } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -114,6 +147,46 @@ function AuthScreen() {
       }
     } catch (error: any) {
       Alert.alert("Błąd", error?.message || "Nie udało się zalogować");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const webPasskeyLogin = async () => {
+    if (typeof window === "undefined" || !("credentials" in navigator)) {
+      Alert.alert("Passkey", "Passkey dostępny tylko w web preview/przeglądarce.");
+      return;
+    }
+    if (!email.trim()) {
+      Alert.alert("Passkey", "Podaj e-mail.");
+      return;
+    }
+
+    try {
+      setBusy(true);
+      const optionsData = await apiRequest<any>("/auth/passkey/login/options", {
+        method: "POST",
+        body: { email: email.trim() },
+      });
+      const publicKey = adaptLoginOptions(optionsData.public_key);
+      const credential = await (navigator as any).credentials.get({ publicKey });
+      if (!credential) throw new Error("Brak danych passkey");
+
+      const response = (credential as any).response;
+      await loginWithPasskey(email.trim(), {
+        id: (credential as any).id,
+        rawId: toBase64Url((credential as any).rawId),
+        type: (credential as any).type,
+        authenticatorAttachment: (credential as any).authenticatorAttachment,
+        response: {
+          clientDataJSON: toBase64Url(response.clientDataJSON),
+          authenticatorData: toBase64Url(response.authenticatorData),
+          signature: toBase64Url(response.signature),
+          userHandle: response.userHandle ? toBase64Url(response.userHandle) : null,
+        },
+      });
+    } catch (error: any) {
+      Alert.alert("Passkey", error?.message || "Logowanie passkey nieudane");
     } finally {
       setBusy(false);
     }
@@ -207,6 +280,16 @@ function AuthScreen() {
                 onPress={onSubmit}
                 disabled={busy}
               />
+              {mode === "login" && (
+                <PixelButton
+                  testID="auth-passkey-login"
+                  label="Zaloguj passkey"
+                  icon="key-outline"
+                  variant="secondary"
+                  onPress={webPasskeyLogin}
+                  disabled={busy}
+                />
+              )}
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -341,6 +424,14 @@ function SellTab() {
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [lastPaidListingId, setLastPaidListingId] = useState<string | null>(null);
+  const [promotionIntent, setPromotionIntent] = useState<null | {
+    intentId: string;
+    listingId: string;
+    packageType: "basic" | "boost";
+    network: "Base" | "Polygon";
+    amount: number;
+  }>(null);
 
   const createListing = async () => {
     try {
@@ -389,6 +480,7 @@ function SellTab() {
         },
       });
       Alert.alert("Sukces", "Opłata potwierdzona, oferta aktywna lub w moderacji.");
+      setLastPaidListingId(feeInfo.listingId);
       setFeeInfo(null);
       setTitle("");
       setDescription("");
@@ -397,6 +489,53 @@ function SellTab() {
       Alert.alert("Błąd", error?.message || "Płatność nieudana");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const createPromotionIntent = async (packageType: "basic" | "boost") => {
+    const targetListingId = lastPaidListingId || feeInfo?.listingId;
+    if (!targetListingId) {
+      Alert.alert("Promocja", "Najpierw utwórz i opłać ofertę.");
+      return;
+    }
+    try {
+      const intent = await apiRequest<any>(`/listings/${targetListingId}/promote-intent`, {
+        method: "POST",
+        auth: true,
+        body: {
+          package_type: packageType,
+          network: "Base",
+          token: "USDC",
+        },
+      });
+      setPromotionIntent({
+        intentId: intent.id,
+        listingId: targetListingId,
+        packageType,
+        network: "Base",
+        amount: intent.amount,
+      });
+      Alert.alert("Promocja", `Intent gotowy: ${intent.amount} USDC (${packageType.toUpperCase()})`);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Nie udało się utworzyć intent promocji");
+    }
+  };
+
+  const confirmPromotion = async () => {
+    if (!promotionIntent) return;
+    try {
+      await apiRequest(`/listings/${promotionIntent.listingId}/promote-confirm`, {
+        method: "POST",
+        auth: true,
+        body: {
+          intent_id: promotionIntent.intentId,
+          tx_hash: `0xPROMO${Date.now()}`,
+        },
+      });
+      Alert.alert("Sukces", "Promowana oferta aktywna.");
+      setPromotionIntent(null);
+    } catch (error: any) {
+      Alert.alert("Błąd", error?.message || "Potwierdzenie promocji nieudane");
     }
   };
 
@@ -452,6 +591,19 @@ function SellTab() {
             <Text style={styles.caption}>Opłata za wystawienie: {feeInfo.amount} {feeInfo.token}</Text>
             <Text style={styles.caption}>Sieć: {feeInfo.network}</Text>
             <PixelButton testID="sell-pay-listing-fee" label="Opłać listing fee" icon="wallet-outline" onPress={payListingFee} disabled={busy} />
+
+            <Text style={[styles.caption, { marginTop: 8 }]}>Promowane oferty (crypto):</Text>
+            <View style={styles.actionsRow}>
+              <PixelButton testID="promo-basic" label="Basic 1 USDC" icon="rocket-outline" variant="secondary" onPress={() => createPromotionIntent("basic")} />
+              <PixelButton testID="promo-boost" label="Boost 3 USDC" icon="flame-outline" variant="secondary" onPress={() => createPromotionIntent("boost")} />
+            </View>
+            {promotionIntent && (
+              <View style={styles.panelSoft}>
+                <Text style={styles.caption}>Intent: {promotionIntent.intentId.slice(0, 8)}…</Text>
+                <Text style={styles.caption}>Pakiet: {promotionIntent.packageType} • Kwota: {promotionIntent.amount} USDC</Text>
+                <PixelButton testID="promo-confirm" label="Potwierdź tx promocji" icon="checkmark-circle-outline" onPress={confirmPromotion} />
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -741,13 +893,35 @@ function ProfileTab() {
   };
 
   const registerPasskeyDemo = async () => {
+    if (typeof window === "undefined" || !("credentials" in navigator)) {
+      Alert.alert("Passkey", "Obsługa passkey dostępna w web preview/przeglądarce.");
+      return;
+    }
     try {
+      const optionsData = await apiRequest<any>("/auth/passkey/register/options", {
+        method: "POST",
+        auth: true,
+        body: { nickname: "Device Passkey" },
+      });
+      const publicKey = adaptRegistrationOptions(optionsData.public_key);
+      const credential = await (navigator as any).credentials.create({ publicKey });
+      if (!credential) throw new Error("Brak credential passkey");
+
+      const response = (credential as any).response;
       await apiRequest("/auth/passkey/register", {
         method: "POST",
         auth: true,
         body: {
-          credential_id: `cred-${Date.now()}`,
-          public_key: `pk-${Date.now()}`,
+          credential: {
+            id: (credential as any).id,
+            rawId: toBase64Url((credential as any).rawId),
+            type: (credential as any).type,
+            authenticatorAttachment: (credential as any).authenticatorAttachment,
+            response: {
+              clientDataJSON: toBase64Url(response.clientDataJSON),
+              attestationObject: toBase64Url(response.attestationObject),
+            },
+          },
           nickname: "Device Passkey",
         },
       });

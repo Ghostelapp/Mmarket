@@ -2,19 +2,38 @@ import logging
 import os
 import re
 import uuid
+import json
+import hmac
+import hashlib
+import subprocess
+import tempfile
+from decimal import Decimal
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
+import boto3
 import pyotp
+import requests
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, EmailStr, Field
 from starlette.middleware.cors import CORSMiddleware
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    options_to_json,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
 
 
 ROOT_DIR = Path(__file__).parent
@@ -32,8 +51,72 @@ ACCESS_TTL_MIN = 20
 REFRESH_TTL_DAYS = 14
 PLATFORM_NAME = "MASK Market"
 
-SUPPORTED_NETWORKS = ["Base", "Polygon", "Arbitrum"]
-SUPPORTED_TOKENS = ["USDC", "EURC"]
+SUPPORTED_NETWORKS = ["Base", "Polygon"]
+SUPPORTED_TOKENS = ["USDC"]
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
+ENABLE_ONCHAIN_INDEXER = env_bool("ENABLE_ONCHAIN_INDEXER", False)
+ENABLE_R2_STORAGE = env_bool("ENABLE_R2_STORAGE", False)
+ENABLE_AV_SCAN = env_bool("ENABLE_AV_SCAN", False)
+
+ALCHEMY_API_KEY_BASE = os.environ.get("ALCHEMY_API_KEY_BASE", "")
+ALCHEMY_API_KEY_POLYGON = os.environ.get("ALCHEMY_API_KEY_POLYGON", "")
+ALCHEMY_WEBHOOK_SIGNING_KEY = os.environ.get("ALCHEMY_WEBHOOK_SIGNING_KEY", "")
+
+USDC_CONTRACTS = {
+    "Base": os.environ.get(
+        "USDC_CONTRACT_BASE", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    ).lower(),
+    "Polygon": os.environ.get(
+        "USDC_CONTRACT_POLYGON", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+    ).lower(),
+}
+
+ALCHEMY_RPC_URLS = {
+    "Base": f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY_BASE}",
+    "Polygon": f"https://polygon-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY_POLYGON}",
+}
+
+WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID", "localhost")
+WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "MASK Market")
+WEBAUTHN_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("WEBAUTHN_ALLOWED_ORIGINS", "http://localhost:8081").split(",")
+    if origin.strip()
+]
+
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME", "")
+R2_PUBLIC_BASE_URL = os.environ.get("R2_PUBLIC_BASE_URL", "")
+CLAMAV_COMMAND = os.environ.get("CLAMAV_COMMAND", "clamscan")
+
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+PROMOTION_PACKAGES = {
+    "basic": {"amount_usdc": 1.0, "duration_hours": 24, "label": "Basic Boost"},
+    "boost": {"amount_usdc": 3.0, "duration_hours": 72, "label": "Boost Premium"},
+}
+
+UPLOAD_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+r2_client = None
+if ENABLE_R2_STORAGE and all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME]):
+    r2_client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name="auto",
+    )
 
 DEFAULT_LISTING_FEES = {
     "elektronika": 1.0,
@@ -104,15 +187,22 @@ class TwoFAVerifyInput(BaseModel):
 
 
 class PasskeyRegisterInput(BaseModel):
-    credential_id: str
-    public_key: str
+    credential: Dict[str, Any]
     nickname: str = "main"
 
 
 class PasskeyLoginInput(BaseModel):
     email: EmailStr
-    credential_id: str
+    credential: Dict[str, Any]
     device_name: str = "Passkey device"
+
+
+class PasskeyRegisterOptionsInput(BaseModel):
+    nickname: str = "main"
+
+
+class PasskeyLoginOptionsInput(BaseModel):
+    email: EmailStr
 
 
 class MeUpdateInput(BaseModel):
@@ -147,6 +237,7 @@ class PayListingFeeInput(BaseModel):
     token: str
     network: str
     payment_tx_hash: str = Field(min_length=10, max_length=120)
+    intent_id: Optional[str] = None
 
 
 class ReportInput(BaseModel):
@@ -193,6 +284,21 @@ class PaymentIntentInput(BaseModel):
     network: str
     purpose: Literal["listing_fee", "escrow_funding", "premium", "promotion"]
     target_id: str
+
+
+class PaymentTxSubmitInput(BaseModel):
+    tx_hash: str = Field(min_length=10, max_length=120)
+
+
+class PromoteIntentInput(BaseModel):
+    package_type: Literal["basic", "boost"]
+    network: Literal["Base", "Polygon"]
+    token: Literal["USDC"] = "USDC"
+
+
+class PromoteConfirmInput(BaseModel):
+    intent_id: str
+    tx_hash: str = Field(min_length=10, max_length=120)
 
 
 class ListingFeeRulePatchInput(BaseModel):
@@ -295,6 +401,278 @@ def compute_wallet_risk(wallet_address: str) -> int:
         if lowered.endswith(suffix):
             return 95
     return 15
+
+
+def is_onchain_indexer_ready() -> bool:
+    return ENABLE_ONCHAIN_INDEXER and bool(ALCHEMY_API_KEY_BASE and ALCHEMY_API_KEY_POLYGON)
+
+
+def to_topic_address(address: str) -> str:
+    normalized = address.lower().replace("0x", "")
+    return "0x" + ("0" * 24) + normalized
+
+
+def parse_hex_amount(hex_value: str) -> float:
+    if not hex_value:
+        return 0.0
+    raw = int(hex_value, 16)
+    return float(Decimal(raw) / Decimal(10**6))
+
+
+def call_alchemy_rpc(network: str, method: str, params: list) -> dict:
+    url = ALCHEMY_RPC_URLS.get(network)
+    if not url or url.endswith("/"):
+        raise HTTPException(status_code=503, detail="Indexer on-chain nie jest skonfigurowany")
+
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    try:
+        response = requests.post(url, json=payload, timeout=20)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="Błąd połączenia z Alchemy") from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Alchemy RPC error")
+
+    data = response.json()
+    if data.get("error"):
+        raise HTTPException(status_code=400, detail=f"Alchemy: {data['error'].get('message', 'error')}")
+    return data
+
+
+def verify_usdc_transfer_onchain(
+    network: str,
+    tx_hash: str,
+    expected_to: str,
+    expected_amount: float,
+) -> Tuple[bool, str, dict]:
+    if network not in {"Base", "Polygon"}:
+        return False, "Sieć poza zakresem MVP on-chain", {}
+
+    data = call_alchemy_rpc(network, "eth_getTransactionReceipt", [tx_hash])
+    receipt = data.get("result")
+    if not receipt:
+        return False, "Brak potwierdzenia transakcji", {}
+
+    status_hex = receipt.get("status", "0x0")
+    if int(status_hex, 16) != 1:
+        return False, "Transakcja on-chain nieudana", {"receipt": receipt}
+
+    expected_to_topic = to_topic_address(expected_to)
+    usdc_contract = USDC_CONTRACTS[network]
+    tolerance = 0.000001
+
+    for log in receipt.get("logs", []):
+        log_address = str(log.get("address", "")).lower()
+        topics = log.get("topics", [])
+        if log_address != usdc_contract:
+            continue
+        if len(topics) < 3:
+            continue
+        if topics[0].lower() != TRANSFER_TOPIC:
+            continue
+        if topics[2].lower() != expected_to_topic:
+            continue
+
+        amount = parse_hex_amount(log.get("data", "0x0"))
+        if amount + tolerance < expected_amount:
+            continue
+        return True, "Potwierdzono transfer USDC on-chain", {
+            "amount": amount,
+            "network": network,
+            "tx_hash": tx_hash,
+        }
+
+    return False, "Nie znaleziono poprawnego transferu USDC", {"receipt": receipt}
+
+
+def hmac_matches(raw_body: bytes, signature: str) -> bool:
+    if not ALCHEMY_WEBHOOK_SIGNING_KEY:
+        return False
+    expected = hmac.new(
+        ALCHEMY_WEBHOOK_SIGNING_KEY.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def generate_webauthn_challenge() -> bytes:
+    return os.urandom(32)
+
+
+def serialize_options(options_obj: Any) -> dict:
+    return json.loads(options_to_json(options_obj))
+
+
+async def save_passkey_challenge(user_id: str, purpose: str, challenge_b64: str):
+    await db.passkey_challenges.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "purpose": purpose,
+            "challenge_b64": challenge_b64,
+            "used": False,
+            "created_at": now_utc(),
+            "expires_at": now_utc() + timedelta(minutes=10),
+        }
+    )
+
+
+async def pop_passkey_challenge(user_id: str, purpose: str) -> Optional[dict]:
+    challenge = await db.passkey_challenges.find_one(
+        {
+            "user_id": user_id,
+            "purpose": purpose,
+            "used": False,
+            "expires_at": {"$gte": now_utc()},
+        },
+        {"_id": 0},
+        sort=[("created_at", -1)],
+    )
+    if not challenge:
+        return None
+    await db.passkey_challenges.update_one(
+        {"id": challenge["id"]},
+        {"$set": {"used": True, "used_at": now_utc()}},
+    )
+    return challenge
+
+
+def run_av_scan_if_enabled(path: str) -> Tuple[bool, str]:
+    if not ENABLE_AV_SCAN:
+        return True, "AV_SCAN_DISABLED"
+    try:
+        proc = subprocess.run(
+            [CLAMAV_COMMAND, "--no-summary", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except Exception as exc:
+        return False, f"AV_SCAN_ERROR:{exc}"
+
+    output = f"{proc.stdout} {proc.stderr}".upper()
+    if "FOUND" in output:
+        return False, "MALWARE_DETECTED"
+    if proc.returncode not in {0}:
+        return False, "AV_SCAN_FAILED"
+    return True, "CLEAN"
+
+
+def process_image_bytes(raw_bytes: bytes) -> Tuple[bytes, bytes, str]:
+    try:
+        image = Image.open(BytesIO(raw_bytes))
+    except UnidentifiedImageError as exc:
+        raise HTTPException(status_code=400, detail="Niepoprawny format obrazu") from exc
+
+    image_format = (image.format or "JPEG").upper()
+    if image_format not in {"JPEG", "PNG", "WEBP"}:
+        image_format = "JPEG"
+
+    cleaned_buffer = BytesIO()
+    image.save(cleaned_buffer, format=image_format, quality=90)
+    cleaned = cleaned_buffer.getvalue()
+
+    thumb_image = image.copy()
+    thumb_image.thumbnail((512, 512))
+    thumb_buffer = BytesIO()
+    thumb_image.save(thumb_buffer, format=image_format, quality=84)
+    thumb = thumb_buffer.getvalue()
+
+    ext = "jpg" if image_format == "JPEG" else image_format.lower()
+    return cleaned, thumb, ext
+
+
+def upload_bytes_to_r2(key: str, blob: bytes, content_type: str):
+    if not r2_client:
+        raise HTTPException(status_code=503, detail="R2 storage nie jest skonfigurowany")
+    r2_client.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=key,
+        Body=blob,
+        ContentType=content_type,
+    )
+
+
+def signed_r2_get_url(key: str, expires: int = 3600) -> Optional[str]:
+    if not r2_client:
+        return None
+    return r2_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": R2_BUCKET_NAME, "Key": key},
+        ExpiresIn=expires,
+    )
+
+
+def normalize_network_label(raw: str) -> Optional[str]:
+    lower = str(raw).lower()
+    if "base" in lower:
+        return "Base"
+    if "polygon" in lower:
+        return "Polygon"
+    return None
+
+
+async def activate_listing_after_fee(listing: dict):
+    moderation_status = "PENDING" if listing.get("risk_score", 0) > 70 else "APPROVED"
+    status = "ACTIVE" if moderation_status == "APPROVED" else "UNDER_REVIEW"
+    await db.listings.update_one(
+        {"id": listing["id"]},
+        {
+            "$set": {
+                "status": status,
+                "moderation_status": moderation_status,
+                "listing_fee.status": "PAID",
+                "updated_at": now_utc(),
+            }
+        },
+    )
+
+
+async def activate_listing_promotion(
+    listing_id: str,
+    package_type: str,
+    amount_usdc: float,
+    tx_hash: str,
+    network: str,
+):
+    package = PROMOTION_PACKAGES.get(package_type)
+    if not package:
+        raise HTTPException(status_code=400, detail="Nieznany pakiet promocji")
+
+    starts = now_utc()
+    ends = starts + timedelta(hours=package["duration_hours"])
+    await db.listings.update_one(
+        {"id": listing_id},
+        {
+            "$set": {
+                "promotion": {
+                    "is_promoted": True,
+                    "package_type": package_type,
+                    "package_label": package["label"],
+                    "amount_usdc": amount_usdc,
+                    "network": network,
+                    "tx_hash": tx_hash,
+                    "starts_at": starts,
+                    "ends_at": ends,
+                },
+                "updated_at": now_utc(),
+            }
+        },
+    )
+
+
+def serialize_webauthn_credential_for_verify(credential: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": credential.get("id"),
+        "rawId": credential.get("rawId"),
+        "type": credential.get("type"),
+        "response": credential.get("response", {}),
+        "clientExtensionResults": credential.get("clientExtensionResults", {}),
+        "authenticatorAttachment": credential.get("authenticatorAttachment"),
+    }
 
 
 async def get_optional_user(token: Optional[str] = Depends(oauth2_optional)) -> Optional[dict]:
@@ -522,6 +900,11 @@ async def startup_seed_data():
                 }
             )
 
+    await db.passkey_challenges.create_index([("expires_at", 1)], expireAfterSeconds=0)
+    await db.passkey_challenges.create_index([("user_id", 1), ("purpose", 1), ("created_at", -1)])
+    await db.payment_intents.create_index([("status", 1), ("network", 1), ("created_at", -1)])
+    await db.listing_images.create_index([("listing_id", 1), ("created_at", -1)])
+
 
 @api_router.get("/")
 async def root():
@@ -709,24 +1092,125 @@ async def auth_verify_2fa(payload: TwoFAVerifyInput, user: dict = Depends(get_cu
     raise HTTPException(status_code=401, detail="Kod 2FA niepoprawny")
 
 
+@api_router.post("/auth/passkey/register/options")
+async def auth_passkey_register_options(
+    payload: PasskeyRegisterOptionsInput,
+    user: dict = Depends(get_current_user),
+):
+    passkeys = user.get("passkeys", [])
+    exclude_credentials: List[PublicKeyCredentialDescriptor] = []
+    for item in passkeys:
+        credential_id = item.get("credential_id")
+        if not credential_id:
+            continue
+        try:
+            exclude_credentials.append(
+                PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
+            )
+        except Exception:
+            continue
+
+    challenge = generate_webauthn_challenge()
+    options = generate_registration_options(
+        rp_id=WEBAUTHN_RP_ID,
+        rp_name=WEBAUTHN_RP_NAME,
+        user_id=user["id"].encode("utf-8"),
+        user_name=user["email"],
+        user_display_name=user.get("display_alias", user["email"]),
+        challenge=challenge,
+        exclude_credentials=exclude_credentials or None,
+    )
+
+    await save_passkey_challenge(user["id"], "register", bytes_to_base64url(challenge))
+    return {
+        "public_key": serialize_options(options),
+        "allowed_origins": WEBAUTHN_ALLOWED_ORIGINS,
+        "rp_id": WEBAUTHN_RP_ID,
+        "nickname": payload.nickname,
+    }
+
+
 @api_router.post("/auth/passkey/register")
 async def auth_passkey_register(payload: PasskeyRegisterInput, user: dict = Depends(get_current_user)):
+    challenge_doc = await pop_passkey_challenge(user["id"], "register")
+    if not challenge_doc:
+        raise HTTPException(status_code=400, detail="Brak aktywnego challenge rejestracji")
+
+    try:
+        verification = verify_registration_response(
+            credential=serialize_webauthn_credential_for_verify(payload.credential),
+            expected_challenge=base64url_to_bytes(challenge_doc["challenge_b64"]),
+            expected_rp_id=WEBAUTHN_RP_ID,
+            expected_origin=WEBAUTHN_ALLOWED_ORIGINS,
+            require_user_verification=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Passkey verification failed: {exc}") from exc
+
+    credential_id_b64 = bytes_to_base64url(verification.credential_id)
     passkeys = user.get("passkeys", [])
-    exists = any(pk["credential_id"] == payload.credential_id for pk in passkeys)
-    if exists:
+    if any(pk.get("credential_id") == credential_id_b64 for pk in passkeys):
         raise HTTPException(status_code=409, detail="Passkey już istnieje")
 
     passkeys.append(
         {
             "id": str(uuid.uuid4()),
-            "credential_id": payload.credential_id,
-            "public_key": payload.public_key,
+            "credential_id": credential_id_b64,
+            "public_key": bytes_to_base64url(verification.credential_public_key),
+            "sign_count": verification.sign_count,
             "nickname": payload.nickname,
             "created_at": now_utc(),
         }
     )
-    await db.users.update_one({"id": user["id"]}, {"$set": {"passkeys": passkeys, "updated_at": now_utc()}})
-    return {"message": "Passkey zapisany", "count": len(passkeys)}
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"passkeys": passkeys, "updated_at": now_utc()}},
+    )
+    return {
+        "message": "Passkey zapisany (WebAuthn)",
+        "count": len(passkeys),
+        "credential_id": credential_id_b64,
+    }
+
+
+@api_router.post("/auth/passkey/login/options")
+async def auth_passkey_login_options(payload: PasskeyLoginOptionsInput):
+    user = await db.users.find_one({"email": payload.email.lower().strip()}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Użytkownik nie istnieje")
+
+    passkeys = user.get("passkeys", [])
+    if not passkeys:
+        raise HTTPException(status_code=400, detail="Brak aktywnych passkeys")
+
+    allow_credentials: List[PublicKeyCredentialDescriptor] = []
+    for item in passkeys:
+        credential_id = item.get("credential_id")
+        if not credential_id:
+            continue
+        try:
+            allow_credentials.append(
+                PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential_id))
+            )
+        except Exception:
+            continue
+
+    if not allow_credentials:
+        raise HTTPException(status_code=400, detail="Brak poprawnych passkeys")
+
+    challenge = generate_webauthn_challenge()
+    options = generate_authentication_options(
+        rp_id=WEBAUTHN_RP_ID,
+        challenge=challenge,
+        allow_credentials=allow_credentials,
+        user_verification=UserVerificationRequirement.PREFERRED,
+    )
+    await save_passkey_challenge(user["id"], "login", bytes_to_base64url(challenge))
+    return {
+        "public_key": serialize_options(options),
+        "allowed_origins": WEBAUTHN_ALLOWED_ORIGINS,
+        "rp_id": WEBAUTHN_RP_ID,
+    }
 
 
 @api_router.post("/auth/passkey/login")
@@ -735,10 +1219,41 @@ async def auth_passkey_login(payload: PasskeyLoginInput, request: Request):
     if not user:
         raise HTTPException(status_code=404, detail="Użytkownik nie istnieje")
 
+    challenge_doc = await pop_passkey_challenge(user["id"], "login")
+    if not challenge_doc:
+        raise HTTPException(status_code=400, detail="Brak aktywnego challenge logowania")
+
+    credential_id = payload.credential.get("id")
+    if not credential_id:
+        raise HTTPException(status_code=400, detail="Brak credential id")
+
     passkeys = user.get("passkeys", [])
-    passkey_match = [pk for pk in passkeys if pk["credential_id"] == payload.credential_id]
-    if not passkey_match:
+    matching = next((pk for pk in passkeys if pk.get("credential_id") == credential_id), None)
+    if not matching:
         raise HTTPException(status_code=401, detail="Passkey niepasujący")
+
+    try:
+        verification = verify_authentication_response(
+            credential=serialize_webauthn_credential_for_verify(payload.credential),
+            expected_challenge=base64url_to_bytes(challenge_doc["challenge_b64"]),
+            expected_rp_id=WEBAUTHN_RP_ID,
+            expected_origin=WEBAUTHN_ALLOWED_ORIGINS,
+            credential_public_key=base64url_to_bytes(matching["public_key"]),
+            credential_current_sign_count=int(matching.get("sign_count", 0)),
+            require_user_verification=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Passkey login verification failed: {exc}") from exc
+
+    for index, item in enumerate(passkeys):
+        if item.get("credential_id") == credential_id:
+            passkeys[index]["sign_count"] = verification.new_sign_count
+            passkeys[index]["last_used_at"] = now_utc()
+            break
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"passkeys": passkeys, "updated_at": now_utc()}},
+    )
 
     tokens = await create_session(user, payload.device_name, request)
     return {
@@ -867,6 +1382,10 @@ async def listings_list(
 
     items = await db.listings.find(filters, {"_id": 0}).to_list(200)
     for item in items:
+        promotion = item.get("promotion", {})
+        item["is_promoted"] = bool(
+            promotion.get("is_promoted") and promotion.get("ends_at") and promotion.get("ends_at") > now_utc()
+        )
         seller = await db.users.find_one(
             {"id": item["seller_id"]},
             {
@@ -886,7 +1405,10 @@ async def listings_list(
         item["is_owner"] = bool(current_user and current_user["id"] == item["seller_id"])
 
     reverse = sort != "old"
-    items.sort(key=lambda x: x.get("created_at", now_utc()), reverse=reverse)
+    items.sort(
+        key=lambda x: (x.get("is_promoted", False), x.get("created_at", now_utc())),
+        reverse=reverse,
+    )
     return items
 
 
@@ -909,6 +1431,25 @@ async def listing_detail(listing_id: str):
         },
     )
     listing["seller_public"] = seller
+    images_meta = await db.listing_images.find(
+        {"listing_id": listing_id}, {"_id": 0}
+    ).to_list(30)
+    if images_meta:
+        listing["processed_images"] = [
+            {
+                "id": img["id"],
+                "thumb_key": img.get("thumb_key"),
+                "original_key": img.get("original_key"),
+                "thumb_signed_url": signed_r2_get_url(img.get("thumb_key", ""))
+                if img.get("thumb_key")
+                else None,
+                "original_signed_url": signed_r2_get_url(img.get("original_key", ""))
+                if img.get("original_key")
+                else None,
+                "scan_status": img.get("scan_status", "UNKNOWN"),
+            }
+            for img in images_meta
+        ]
     return listing
 
 
@@ -947,6 +1488,16 @@ async def listing_create(payload: ListingCreateInput, user: dict = Depends(get_c
             "token": listing_fee_rule["token"],
             "network": listing_fee_rule["network"],
             "status": "AWAITING_PAYMENT",
+        },
+        "promotion": {
+            "is_promoted": False,
+            "package_type": None,
+            "package_label": None,
+            "amount_usdc": 0,
+            "network": None,
+            "tx_hash": None,
+            "starts_at": None,
+            "ends_at": None,
         },
         "created_at": now_utc(),
         "updated_at": now_utc(),
@@ -1007,6 +1558,32 @@ async def listing_pay_fee(
     if payload.amount < expected_fee["amount"]:
         raise HTTPException(status_code=400, detail="Kwota opłaty za niska")
 
+    platform_wallet = await db.platform_fee_wallets.find_one(
+        {
+            "network": payload.network,
+            "token": payload.token,
+            "is_active": True,
+        },
+        {"_id": 0},
+    )
+    if not platform_wallet:
+        raise HTTPException(status_code=400, detail="Brak aktywnego walleta platformy")
+
+    verification_mode = "OFFCHAIN_FALLBACK"
+    verification_ok = True
+    verification_meta: Dict[str, Any] = {}
+    if is_onchain_indexer_ready():
+        verification_ok, _, verification_meta = verify_usdc_transfer_onchain(
+            payload.network,
+            payload.payment_tx_hash,
+            platform_wallet["wallet_address"],
+            payload.amount,
+        )
+        verification_mode = "ONCHAIN_ALCHEMY"
+
+    if not verification_ok:
+        raise HTTPException(status_code=400, detail="Transakcja niepotwierdzona on-chain")
+
     fee_doc = {
         "id": str(uuid.uuid4()),
         "listing_id": listing_id,
@@ -1016,27 +1593,18 @@ async def listing_pay_fee(
         "network": payload.network,
         "payment_tx_hash": payload.payment_tx_hash,
         "status": "CONFIRMED",
+        "verification_mode": verification_mode,
+        "verification_meta": verification_meta,
         "created_at": now_utc(),
     }
     await db.listing_fees.insert_one(fee_doc)
 
-    moderation_status = "PENDING" if listing.get("risk_score", 0) > 70 else "APPROVED"
-    status = "ACTIVE" if moderation_status == "APPROVED" else "UNDER_REVIEW"
-    await db.listings.update_one(
-        {"id": listing_id},
-        {
-            "$set": {
-                "status": status,
-                "moderation_status": moderation_status,
-                "listing_fee.status": "PAID",
-                "updated_at": now_utc(),
-            }
-        },
-    )
+    await activate_listing_after_fee(listing)
     updated_listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
     return {
         "message": "Opłata listingowa potwierdzona",
         "tx_hash": payload.payment_tx_hash,
+        "verification_mode": verification_mode,
         "listing": updated_listing,
     }
 
@@ -1064,6 +1632,210 @@ async def listing_report(
     }
     await db.reports.insert_one(report_doc)
     return {"message": "Zgłoszenie przyjęte", "report_id": report_doc["id"]}
+
+
+@api_router.post("/listings/{listing_id}/promote-intent")
+async def listing_promote_intent(
+    listing_id: str,
+    payload: PromoteIntentInput,
+    user: dict = Depends(get_current_user),
+):
+    listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
+    if not listing:
+        raise HTTPException(status_code=404, detail="Oferta nie istnieje")
+    if listing["seller_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Brak dostępu")
+    if listing.get("status") not in {"ACTIVE", "UNDER_REVIEW"}:
+        raise HTTPException(status_code=400, detail="Oferta musi być aktywna lub w moderacji")
+
+    package = PROMOTION_PACKAGES.get(payload.package_type)
+    if not package:
+        raise HTTPException(status_code=400, detail="Nieznany pakiet")
+
+    platform_wallet = await db.platform_fee_wallets.find_one(
+        {
+            "network": payload.network,
+            "token": payload.token,
+            "is_active": True,
+        },
+        {"_id": 0},
+    )
+    if not platform_wallet:
+        raise HTTPException(status_code=400, detail="Brak aktywnego walleta platformy")
+
+    intent = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "listing_id": listing_id,
+        "amount": package["amount_usdc"],
+        "token": payload.token,
+        "network": payload.network,
+        "purpose": "promotion",
+        "target_id": listing_id,
+        "package_type": payload.package_type,
+        "package_label": package["label"],
+        "duration_hours": package["duration_hours"],
+        "receiver_wallet": platform_wallet["wallet_address"],
+        "status": "PENDING",
+        "verification_mode": "ONCHAIN_ALCHEMY" if is_onchain_indexer_ready() else "OFFCHAIN_FALLBACK",
+        "created_at": now_utc(),
+    }
+    await db.payment_intents.insert_one(intent)
+    return clean_mongo_doc(intent)
+
+
+@api_router.post("/listings/{listing_id}/promote-confirm")
+async def listing_promote_confirm(
+    listing_id: str,
+    payload: PromoteConfirmInput,
+    user: dict = Depends(get_current_user),
+):
+    listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
+    if not listing:
+        raise HTTPException(status_code=404, detail="Oferta nie istnieje")
+    if listing["seller_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Brak dostępu")
+
+    intent = await db.payment_intents.find_one(
+        {
+            "id": payload.intent_id,
+            "listing_id": listing_id,
+            "user_id": user["id"],
+            "purpose": "promotion",
+        },
+        {"_id": 0},
+    )
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent promocji nie istnieje")
+    if intent.get("status") == "CONFIRMED":
+        return {
+            "message": "Promocja już aktywna",
+            "intent": intent,
+        }
+
+    verification_mode = intent.get("verification_mode", "OFFCHAIN_FALLBACK")
+    verification_ok = True
+    verification_meta: Dict[str, Any] = {}
+    if is_onchain_indexer_ready():
+        verification_ok, _, verification_meta = verify_usdc_transfer_onchain(
+            intent["network"],
+            payload.tx_hash,
+            intent["receiver_wallet"],
+            float(intent["amount"]),
+        )
+        verification_mode = "ONCHAIN_ALCHEMY"
+
+    if not verification_ok:
+        raise HTTPException(status_code=400, detail="Promocja niepotwierdzona on-chain")
+
+    await db.payment_intents.update_one(
+        {"id": intent["id"]},
+        {
+            "$set": {
+                "status": "CONFIRMED",
+                "tx_hash": payload.tx_hash,
+                "verified_at": now_utc(),
+                "verification_mode": verification_mode,
+                "verification_meta": verification_meta,
+            }
+        },
+    )
+
+    await activate_listing_promotion(
+        listing_id=listing_id,
+        package_type=intent["package_type"],
+        amount_usdc=float(intent["amount"]),
+        tx_hash=payload.tx_hash,
+        network=intent["network"],
+    )
+    updated_listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
+    return {
+        "message": "Promowana oferta aktywna",
+        "listing": updated_listing,
+        "verification_mode": verification_mode,
+    }
+
+
+@api_router.post("/listings/{listing_id}/images/upload")
+async def listing_upload_image(
+    listing_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
+    if not listing:
+        raise HTTPException(status_code=404, detail="Oferta nie istnieje")
+    if listing["seller_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Brak dostępu")
+    if not file.content_type or file.content_type not in UPLOAD_ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="Nieobsługiwany typ pliku")
+
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Pusty plik")
+    if len(raw_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Plik zbyt duży (max 8MB)")
+
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".upload") as tmp:
+        tmp.write(raw_bytes)
+        tmp.flush()
+        clean, scan_status = run_av_scan_if_enabled(tmp.name)
+    if not clean:
+        raise HTTPException(status_code=400, detail=f"Upload blocked: {scan_status}")
+
+    cleaned, thumb, ext = process_image_bytes(raw_bytes)
+    image_id = str(uuid.uuid4())
+    original_key = f"listings/{listing_id}/{image_id}/original.{ext}"
+    thumb_key = f"listings/{listing_id}/{image_id}/thumb.{ext}"
+
+    storage_provider = "local"
+    original_signed = None
+    thumb_signed = None
+    if r2_client:
+        upload_bytes_to_r2(original_key, cleaned, file.content_type)
+        upload_bytes_to_r2(thumb_key, thumb, file.content_type)
+        storage_provider = "r2"
+        original_signed = signed_r2_get_url(original_key)
+        thumb_signed = signed_r2_get_url(thumb_key)
+
+    image_doc = {
+        "id": image_id,
+        "listing_id": listing_id,
+        "original_key": original_key,
+        "thumb_key": thumb_key,
+        "metadata_removed": True,
+        "scan_status": scan_status,
+        "storage_provider": storage_provider,
+        "created_at": now_utc(),
+    }
+    await db.listing_images.insert_one(image_doc)
+    await db.listings.update_one(
+        {"id": listing_id},
+        {
+            "$push": {
+                "images": {
+                    "$each": [
+                        {
+                            "type": "processed",
+                            "image_id": image_id,
+                            "thumb_signed_url": thumb_signed,
+                            "original_signed_url": original_signed,
+                        }
+                    ]
+                }
+            },
+            "$set": {"updated_at": now_utc()},
+        },
+    )
+
+    return {
+        "message": "Zdjęcie przetworzone i zapisane",
+        "image_id": image_id,
+        "scan_status": scan_status,
+        "storage_provider": storage_provider,
+        "original_signed_url": original_signed,
+        "thumb_signed_url": thumb_signed,
+    }
 
 
 @api_router.post("/transactions")
@@ -1468,10 +2240,60 @@ async def crypto_payment_intent(payload: PaymentIntentInput, user: dict = Depend
         "target_id": payload.target_id,
         "receiver_wallet": platform_wallet["wallet_address"],
         "status": "PENDING",
+        "verification_mode": "ONCHAIN_ALCHEMY" if is_onchain_indexer_ready() else "OFFCHAIN_FALLBACK",
         "created_at": now_utc(),
     }
     await db.payment_intents.insert_one(intent)
     return clean_mongo_doc(intent)
+
+
+@api_router.post("/crypto/payment/{intent_id}/submit-tx")
+async def crypto_submit_payment_tx(
+    intent_id: str,
+    payload: PaymentTxSubmitInput,
+    user: dict = Depends(get_current_user),
+):
+    intent = await db.payment_intents.find_one(
+        {"id": intent_id, "user_id": user["id"]},
+        {"_id": 0},
+    )
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent nie istnieje")
+    if intent.get("status") == "CONFIRMED":
+        return {"message": "Płatność już potwierdzona", "intent": intent}
+
+    verify_ok = True
+    verify_mode = intent.get("verification_mode", "OFFCHAIN_FALLBACK")
+    verify_meta: Dict[str, Any] = {}
+    if is_onchain_indexer_ready():
+        verify_ok, _, verify_meta = verify_usdc_transfer_onchain(
+            intent["network"],
+            payload.tx_hash,
+            intent["receiver_wallet"],
+            float(intent["amount"]),
+        )
+        verify_mode = "ONCHAIN_ALCHEMY"
+
+    if not verify_ok:
+        raise HTTPException(status_code=400, detail="Transakcja on-chain niezweryfikowana")
+
+    await db.payment_intents.update_one(
+        {"id": intent_id},
+        {
+            "$set": {
+                "status": "CONFIRMED",
+                "tx_hash": payload.tx_hash,
+                "verified_at": now_utc(),
+                "verification_mode": verify_mode,
+                "verification_meta": verify_meta,
+            }
+        },
+    )
+    updated_intent = await db.payment_intents.find_one({"id": intent_id}, {"_id": 0})
+    return {
+        "message": "Płatność potwierdzona",
+        "intent": updated_intent,
+    }
 
 
 @api_router.get("/crypto/payment/{intent_id}/status")
@@ -1482,6 +2304,80 @@ async def crypto_payment_status(intent_id: str, user: dict = Depends(get_current
     if not intent:
         raise HTTPException(status_code=404, detail="Intent nie istnieje")
     return intent
+
+
+@api_router.post("/crypto/webhooks/alchemy")
+async def crypto_alchemy_webhook(request: Request):
+    raw_body = await request.body()
+    signature = request.headers.get("X-Alchemy-Signature", "")
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing Alchemy signature")
+    if not hmac_matches(raw_body, signature):
+        raise HTTPException(status_code=401, detail="Invalid Alchemy signature")
+
+    payload = await request.json()
+    activity = payload.get("event", {}).get("activity", [])
+    if isinstance(activity, dict):
+        activity = [activity]
+
+    updates = 0
+    for item in activity:
+        tx_hash = item.get("hash") or item.get("transactionHash")
+        if not tx_hash:
+            continue
+        to_addr = str(item.get("toAddress") or item.get("to") or "").lower()
+        token_addr = str(item.get("rawContract", {}).get("address") or item.get("contractAddress") or "").lower()
+        amount_raw = item.get("value")
+        try:
+            amount = float(amount_raw)
+        except Exception:
+            amount = 0.0
+
+        network = normalize_network_label(item.get("network") or payload.get("network") or "")
+        if not network:
+            continue
+        if token_addr and token_addr != USDC_CONTRACTS.get(network, ""):
+            continue
+
+        pending = await db.payment_intents.find_one(
+            {
+                "status": "PENDING",
+                "network": network,
+                "receiver_wallet": {"$regex": f"^{re.escape(to_addr)}$", "$options": "i"},
+                "amount": {"$lte": amount + 0.000001},
+            },
+            {"_id": 0},
+        )
+        if not pending:
+            continue
+
+        await db.payment_intents.update_one(
+            {"id": pending["id"]},
+            {
+                "$set": {
+                    "status": "CONFIRMED",
+                    "tx_hash": tx_hash,
+                    "verified_at": now_utc(),
+                    "verification_mode": "ONCHAIN_ALCHEMY_WEBHOOK",
+                    "webhook_payload": item,
+                }
+            },
+        )
+        updates += 1
+
+        if pending.get("purpose") == "promotion":
+            await activate_listing_promotion(
+                listing_id=pending["listing_id"],
+                package_type=pending["package_type"],
+                amount_usdc=float(pending["amount"]),
+                tx_hash=tx_hash,
+                network=network,
+            )
+
+    return {
+        "status": "ok",
+        "confirmed_intents": updates,
+    }
 
 
 @api_router.get("/admin/dashboard")

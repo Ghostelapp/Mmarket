@@ -1,0 +1,53 @@
+{
+  "summary": "Executed backend + mobile-first frontend validation for requested MASK Market enhancements on public preview URL. 8/9 targeted backend regression tests passed; one critical backend failure remains in marketplace listing sort for promoted offers.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/listings?sort=new",
+        "issue": "500 Internal Server Error when promoted listings exist. Root cause from backend logs: TypeError comparing offset-naive and offset-aware datetimes in listings_list promotion.ends_at > now_utc().",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Marketplace tab data load after login",
+        "issue": "Browser console recorded one 500 resource error during login-to-market transition, consistent with failing GET /api/listings backend endpoint.",
+        "affected_testIDs": ["market-refresh"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_mask_market_jan2026_regression.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/ui_mobile_jan2026/mobile_auth_loaded.jpg",
+    "/app/test_reports/ui_mobile_jan2026/mobile_logged_in_tabs.jpg"
+  ],
+  "action_items": [
+    "Fix datetime normalization in /api/listings sort path (promotion.ends_at vs now_utc timezone handling).",
+    "Re-run backend regression test: test_marketplace_listings_sort_supports_promoted_flag after fix.",
+    "Re-verify Marketplace tab in Expo web preview once backend fix is deployed."
+  ],
+  "critical_code_review_comments": [
+    "Timezone bug in listings_list sorting/promotion check can break core marketplace fetches for all users once promoted listings are present.",
+    "Frontend env key currently uses EXPO_PUBLIC_BACKEND_URL; project guideline states EXPO_BACKEND_URL. Keep one canonical key to avoid config drift."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_mask_market_jan2026_regression.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {
+    "backend": "89%",
+    "frontend": "90%"
+  },
+  "seed_data_creation": "Created TEST_* users, listings, intents and promotions via public APIs during pytest execution.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Auth credentials source verified at /app/memory/test_credentials.md. /app/auth_testing.md not found. Feature flags currently disabled (ENABLE_ONCHAIN_INDEXER=false, ENABLE_R2_STORAGE=false, ENABLE_AV_SCAN=false) and OFFCHAIN_FALLBACK flows validated.",
+  "rca_of_issue": "Repro: create listing -> pay fee -> promote intent -> confirm promotion -> call GET /api/listings?sort=new. Result: 500. Backend stacktrace points to server.py listings_list line comparing promotion.ends_at (naive datetime from DB doc) against now_utc() (timezone-aware), raising TypeError. Mitigation: normalize both datetimes to same timezone awareness before comparison and add regression test for mixed datetime formats."
+}
