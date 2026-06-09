@@ -26,19 +26,19 @@ import { theme } from "@/src/constants/theme";
 import { apiRequest } from "@/src/lib/api";
 import { e2eeDecrypt, e2eeEncrypt } from "@/src/lib/crypto";
 import { useBiometricAuth } from "@/src/hooks/useBiometricAuth";
-import { EncryptedMessage, Listing, Transaction } from "@/src/types";
+import { Category, EncryptedMessage, Listing, Transaction } from "@/src/types";
 
-const categories = [
-  "elektronika",
-  "moda",
-  "dom",
-  "motoryzacja",
-  "sport",
-  "dziecko",
-  "kolekcje",
-  "usługi lokalne",
-  "produkty cyfrowe legalne",
-  "inne",
+const fallbackCategories = [
+  { slug: "elektronika", name: "elektronika" },
+  { slug: "moda", name: "moda" },
+  { slug: "dom", name: "dom" },
+  { slug: "motoryzacja", name: "motoryzacja" },
+  { slug: "sport", name: "sport" },
+  { slug: "dziecko", name: "dziecko" },
+  { slug: "kolekcje", name: "kolekcje" },
+  { slug: "usugi-lokalne", name: "usługi lokalne" },
+  { slug: "produkty-cyfrowe-legalne", name: "produkty cyfrowe legalne" },
+  { slug: "inne", name: "inne" },
 ];
 
 const base64PixelBlue =
@@ -318,6 +318,7 @@ function AuthScreen() {
 
 function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> }) {
   const [items, setItems] = useState<Listing[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<string>("all");
   const [loading, setLoading] = useState(false);
@@ -340,6 +341,41 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
   useEffect(() => {
     fetchListings();
   }, [fetchListings]);
+
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const cats = await apiRequest<Category[]>("/categories", { auth: true });
+        setCategories(cats);
+        if (cats.length === 0) {
+          setCategories(
+            fallbackCategories.map((item, idx) => ({
+              id: `fallback-${idx}`,
+              name: item.name,
+              slug: item.slug,
+              icon: "apps-outline",
+              color: "#00f3ff",
+              sort_order: idx,
+              is_active: true,
+            })),
+          );
+        }
+      } catch {
+        setCategories(
+          fallbackCategories.map((item, idx) => ({
+            id: `fallback-${idx}`,
+            name: item.name,
+            slug: item.slug,
+            icon: "apps-outline",
+            color: "#00f3ff",
+            sort_order: idx,
+            is_active: true,
+          })),
+        );
+      }
+    };
+    loadCategories();
+  }, []);
 
   return (
     <View style={styles.tabContent}>
@@ -366,12 +402,12 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
           </Pressable>
           {categories.map((cat) => (
             <Pressable
-              testID={`filter-category-${cat}`}
-              key={cat}
-              style={[styles.filterChip, filter === cat && styles.filterChipActive]}
-              onPress={() => setFilter(cat)}
+              testID={`filter-category-${cat.slug}`}
+              key={cat.slug}
+              style={[styles.filterChip, filter === cat.slug && styles.filterChipActive]}
+              onPress={() => setFilter(cat.slug)}
             >
-              <Text style={styles.filterText}>{cat}</Text>
+              <Text style={styles.filterText}>{cat.name}</Text>
             </Pressable>
           ))}
         </ScrollView>
@@ -437,11 +473,12 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
 }
 
 function SellTab() {
+  const [categories, setCategories] = useState<Category[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("99");
   const [currency, setCurrency] = useState<"PLN" | "EUR">("PLN");
-  const [category, setCategory] = useState(categories[0]);
+  const [category, setCategory] = useState("");
   const [condition, setCondition] = useState("nowy");
   const [location, setLocation] = useState("Kraków");
   const [feeInfo, setFeeInfo] = useState<{ listingId: string; amount: number; token: string; network: string } | null>(
@@ -456,6 +493,29 @@ function SellTab() {
     network: "Base" | "Polygon";
     amount: number;
   }>(null);
+
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const cats = await apiRequest<Category[]>("/categories", { auth: true });
+        setCategories(cats);
+        if (cats.length > 0) setCategory((prev) => prev || cats[0].slug);
+      } catch {
+        const fallback = fallbackCategories.map((item, idx) => ({
+          id: `fallback-${idx}`,
+          name: item.name,
+          slug: item.slug,
+          icon: "apps-outline",
+          color: "#00f3ff",
+          sort_order: idx,
+          is_active: true,
+        }));
+        setCategories(fallback);
+        if (fallback.length > 0) setCategory((prev) => prev || fallback[0].slug);
+      }
+    };
+    loadCategories();
+  }, []);
 
   const createListing = async () => {
     try {
@@ -600,8 +660,13 @@ function SellTab() {
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
           {categories.map((cat) => (
-            <Pressable key={cat} style={[styles.filterChip, category === cat && styles.filterChipActive]} onPress={() => setCategory(cat)}>
-              <Text style={styles.filterText}>{cat}</Text>
+            <Pressable
+              testID={`sell-category-${cat.slug}`}
+              key={cat.slug}
+              style={[styles.filterChip, category === cat.slug && styles.filterChipActive]}
+              onPress={() => setCategory(cat.slug)}
+            >
+              <Text style={styles.filterText}>{cat.name}</Text>
             </Pressable>
           ))}
         </ScrollView>

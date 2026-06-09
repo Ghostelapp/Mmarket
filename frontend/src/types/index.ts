@@ -25,6 +25,9 @@ export type Listing = {
   crypto_token: string;
   crypto_network: string;
   category: string;
+  category_label?: string;
+  category_icon?: string;
+  category_color?: string;
   condition: string;
   location_public: string;
   status: string;
@@ -53,6 +56,16 @@ export type Listing = {
     trust_score: number;
   };
   created_at: string;
+};
+
+export type Category = {
+  id: string;
+  name: string;
+  slug: string;
+  icon: string;
+  color: string;
+  sort_order: number;
+  is_active: boolean;
 };
 
 export type Transaction = {

@@ -118,6 +118,19 @@ if ENABLE_R2_STORAGE and all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_
         region_name="auto",
     )
 
+DEFAULT_CATEGORY_LABELS = {
+    "elektronika": "elektronika",
+    "moda": "moda",
+    "dom": "dom",
+    "motoryzacja": "motoryzacja",
+    "sport": "sport",
+    "dziecko": "dziecko",
+    "kolekcje": "kolekcje",
+    "usugi-lokalne": "usługi lokalne",
+    "produkty-cyfrowe-legalne": "produkty cyfrowe legalne",
+    "inne": "inne",
+}
+
 DEFAULT_LISTING_FEES = {
     "elektronika": 1.0,
     "moda": 0.25,
@@ -126,8 +139,8 @@ DEFAULT_LISTING_FEES = {
     "sport": 0.5,
     "dziecko": 0.2,
     "kolekcje": 0.8,
-    "usługi lokalne": 0.3,
-    "produkty cyfrowe legalne": 0.4,
+    "usugi-lokalne": 0.3,
+    "produkty-cyfrowe-legalne": 0.4,
     "inne": 0.25,
 }
 
@@ -331,6 +344,31 @@ class ResolveDisputeInput(BaseModel):
 class ModerateListingInput(BaseModel):
     action: Literal["approve", "reject", "hide"]
     reason: str
+
+
+class CategoryCreateInput(BaseModel):
+    name: str = Field(min_length=2, max_length=60)
+    slug: str = Field(min_length=2, max_length=64)
+    icon: str = Field(min_length=1, max_length=64)
+    color: str = Field(min_length=4, max_length=20)
+    sort_order: int = Field(default=100, ge=0, le=10000)
+
+
+class CategoryUpdateInput(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=60)
+    icon: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    color: Optional[str] = Field(default=None, min_length=4, max_length=20)
+    sort_order: Optional[int] = Field(default=None, ge=0, le=10000)
+    is_active: Optional[bool] = None
+
+
+class CategoryReorderItem(BaseModel):
+    id: str
+    sort_order: int = Field(ge=0, le=10000)
+
+
+class CategoryReorderInput(BaseModel):
+    items: List[CategoryReorderItem]
 
 
 def now_utc() -> datetime:
@@ -633,6 +671,113 @@ def normalize_datetime_for_compare(value: Any) -> Optional[datetime]:
     return None
 
 
+def normalize_slug(raw: str) -> str:
+    lowered = raw.strip().lower()
+    lowered = re.sub(r"\s+", "-", lowered)
+    lowered = re.sub(r"[^a-z0-9\-]", "", lowered)
+    lowered = re.sub(r"\-+", "-", lowered).strip("-")
+    return lowered
+
+
+def ensure_hex_color(value: str) -> bool:
+    return bool(re.match(r"^#[0-9a-fA-F]{6}$", value.strip()))
+
+
+async def get_active_categories() -> List[dict]:
+    categories = await db.categories.find(
+        {"is_active": True},
+        {"_id": 0},
+    ).to_list(300)
+    categories.sort(key=lambda c: (c.get("sort_order", 1000), c.get("name", "")))
+    return categories
+
+
+async def category_exists_by_slug(slug: str) -> Optional[dict]:
+    return await db.categories.find_one({"slug": slug}, {"_id": 0})
+
+
+async def hide_listings_for_category_slug(slug: str):
+    await db.listings.update_many(
+        {
+            "category": slug,
+            "status": {"$nin": ["SOLD", "DELETED", "REJECTED", "CANCELLED"]},
+        },
+        {
+            "$set": {
+                "status": "HIDDEN_CATEGORY",
+                "moderation_status": "CATEGORY_DISABLED",
+                "moderation_reason": "Kategoria wyłączona/usunięta przez admina",
+                "updated_at": now_utc(),
+            }
+        },
+    )
+
+
+async def restore_listings_for_category_slug(slug: str):
+    await db.listings.update_many(
+        {
+            "category": slug,
+            "status": "HIDDEN_CATEGORY",
+        },
+        {
+            "$set": {
+                "status": "UNDER_REVIEW",
+                "moderation_status": "PENDING",
+                "moderation_reason": "Kategoria ponownie aktywna — wymagany przegląd",
+                "updated_at": now_utc(),
+            }
+        },
+    )
+
+
+async def ensure_default_categories_seeded():
+    existing_count = await db.categories.count_documents({})
+    if existing_count > 0:
+        return
+
+    default_icons = {
+        "elektronika": "hardware-chip-outline",
+        "moda": "shirt-outline",
+        "dom": "home-outline",
+        "motoryzacja": "car-sport-outline",
+        "sport": "barbell-outline",
+        "dziecko": "happy-outline",
+        "kolekcje": "diamond-outline",
+        "usugi-lokalne": "location-outline",
+        "produkty-cyfrowe-legalne": "cloud-outline",
+        "inne": "apps-outline",
+    }
+    default_colors = {
+        "elektronika": "#00f3ff",
+        "moda": "#ff00ff",
+        "dom": "#39ff14",
+        "motoryzacja": "#ffcc66",
+        "sport": "#00f3ff",
+        "dziecko": "#39ff14",
+        "kolekcje": "#ff00ff",
+        "usugi-lokalne": "#00f3ff",
+        "produkty-cyfrowe-legalne": "#39ff14",
+        "inne": "#a1a1aa",
+    }
+
+    order = 10
+    for slug in DEFAULT_LISTING_FEES.keys():
+        await db.categories.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "name": DEFAULT_CATEGORY_LABELS.get(slug, slug),
+                "slug": slug,
+                "icon": default_icons.get(slug, "apps-outline"),
+                "color": default_colors.get(slug, "#00f3ff"),
+                "sort_order": order,
+                "is_active": True,
+                "created_at": now_utc(),
+                "updated_at": now_utc(),
+            }
+        )
+        order += 10
+
+
 async def activate_listing_after_fee(listing: dict):
     moderation_status = "PENDING" if listing.get("risk_score", 0) > 70 else "APPROVED"
     status = "ACTIVE" if moderation_status == "APPROVED" else "UNDER_REVIEW"
@@ -918,10 +1063,14 @@ async def startup_seed_data():
                 }
             )
 
+    await ensure_default_categories_seeded()
+
     await db.passkey_challenges.create_index([("expires_at", 1)], expireAfterSeconds=0)
     await db.passkey_challenges.create_index([("user_id", 1), ("purpose", 1), ("created_at", -1)])
     await db.payment_intents.create_index([("status", 1), ("network", 1), ("created_at", -1)])
     await db.listing_images.create_index([("listing_id", 1), ("created_at", -1)])
+    await db.categories.create_index([("slug", 1)], unique=True)
+    await db.categories.create_index([("is_active", 1), ("sort_order", 1)])
 
 
 @api_router.get("/")
@@ -931,6 +1080,16 @@ async def root():
         "status": "ok",
         "privacy_promise": "Anonimowość wobec użytkowników, odpowiedzialność wobec systemu",
     }
+
+
+@api_router.get("/categories")
+async def list_categories(current_user: Optional[dict] = Depends(get_optional_user)):
+    if current_user and current_user.get("role") == "admin":
+        categories = await db.categories.find({}, {"_id": 0}).to_list(500)
+    else:
+        categories = await get_active_categories()
+    categories.sort(key=lambda c: (c.get("sort_order", 1000), c.get("name", "")))
+    return categories
 
 
 @api_router.post("/auth/register")
@@ -1393,7 +1552,18 @@ async def listings_list(
 ):
     filters: Dict[str, Any] = {"status": {"$in": ["ACTIVE", "RESERVED"]}}
     if category:
+        cat_obj = await db.categories.find_one({"slug": category, "is_active": True}, {"_id": 0})
+        if not cat_obj:
+            return []
         filters["category"] = category
+
+    if not current_user or current_user.get("role") != "admin":
+        active_categories = await get_active_categories()
+        allowed_slugs = [cat["slug"] for cat in active_categories]
+        if allowed_slugs:
+            filters["category"] = filters.get("category", {"$in": allowed_slugs})
+        else:
+            return []
     if q:
         regex = re.compile(re.escape(q), re.IGNORECASE)
         filters["$or"] = [{"title": regex}, {"description": regex}]
@@ -1477,10 +1647,15 @@ async def listing_create(payload: ListingCreateInput, user: dict = Depends(get_c
     if user.get("panic_lock_enabled"):
         raise HTTPException(status_code=403, detail="Konto zablokowane przez Panic Lock")
 
-    if payload.category not in DEFAULT_LISTING_FEES:
-        raise HTTPException(status_code=400, detail="Nieobsługiwana kategoria")
+    category_slug = normalize_slug(payload.category)
+    category_obj = await db.categories.find_one(
+        {"slug": category_slug, "is_active": True},
+        {"_id": 0},
+    )
+    if not category_obj:
+        raise HTTPException(status_code=400, detail="Nieobsługiwana lub nieaktywna kategoria")
 
-    listing_fee_rule = await get_listing_fee_rule(payload.category)
+    listing_fee_rule = await get_listing_fee_rule(category_slug)
     crypto_amount = round(payload.price_fiat * (1.0 if payload.fiat_currency == "EUR" else 0.24), 2)
     risk_score = 85 if payload.price_fiat < 2 else 20
 
@@ -1494,7 +1669,10 @@ async def listing_create(payload: ListingCreateInput, user: dict = Depends(get_c
         "crypto_amount": crypto_amount,
         "crypto_token": "USDC",
         "crypto_network": "Base",
-        "category": payload.category,
+        "category": category_slug,
+        "category_label": category_obj["name"],
+        "category_icon": category_obj["icon"],
+        "category_color": category_obj["color"],
         "condition": payload.condition,
         "location_public": payload.location_public,
         "shipping_options": payload.shipping_options,
@@ -1538,6 +1716,18 @@ async def listing_update(
         raise HTTPException(status_code=403, detail="Brak dostępu")
 
     updates = payload.model_dump(exclude_none=True)
+    if "category" in updates:
+        next_slug = normalize_slug(str(updates["category"]))
+        category_obj = await db.categories.find_one(
+            {"slug": next_slug, "is_active": True},
+            {"_id": 0},
+        )
+        if not category_obj:
+            raise HTTPException(status_code=400, detail="Nieobsługiwana lub nieaktywna kategoria")
+        updates["category"] = next_slug
+        updates["category_label"] = category_obj["name"]
+        updates["category_icon"] = category_obj["icon"]
+        updates["category_color"] = category_obj["color"]
     updates["updated_at"] = now_utc()
     await db.listings.update_one({"id": listing_id}, {"$set": updates})
     updated = await db.listings.find_one({"id": listing_id}, {"_id": 0})
@@ -2585,6 +2775,158 @@ async def admin_platform_wallets(admin: dict = Depends(get_current_admin)):
     _ = admin
     wallets = await db.platform_fee_wallets.find({}, {"_id": 0}).to_list(1000)
     return wallets
+
+
+@api_router.get("/admin/categories")
+async def admin_categories(admin: dict = Depends(get_current_admin)):
+    _ = admin
+    categories = await db.categories.find({}, {"_id": 0}).to_list(500)
+    categories.sort(key=lambda c: (c.get("sort_order", 1000), c.get("name", "")))
+    return categories
+
+
+@api_router.post("/admin/categories")
+async def admin_create_category(
+    payload: CategoryCreateInput,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+):
+    slug = normalize_slug(payload.slug or payload.name)
+    if not slug:
+        raise HTTPException(status_code=400, detail="Niepoprawny slug")
+    if not ensure_hex_color(payload.color):
+        raise HTTPException(status_code=400, detail="Kolor musi być w formacie #RRGGBB")
+
+    existing = await category_exists_by_slug(slug)
+    if existing:
+        raise HTTPException(status_code=409, detail="Kategoria o tym slug już istnieje")
+
+    category_doc = {
+        "id": str(uuid.uuid4()),
+        "name": payload.name.strip(),
+        "slug": slug,
+        "icon": payload.icon.strip(),
+        "color": payload.color.strip(),
+        "sort_order": payload.sort_order,
+        "is_active": True,
+        "created_at": now_utc(),
+        "updated_at": now_utc(),
+    }
+    await db.categories.insert_one(category_doc)
+
+    await write_audit_log(
+        admin_id=admin["id"],
+        action="create_category",
+        target_type="category",
+        target_id=category_doc["id"],
+        reason="Dodanie kategorii",
+        old_value=None,
+        new_value=category_doc,
+        request=request,
+    )
+    return clean_mongo_doc(category_doc)
+
+
+@api_router.patch("/admin/categories/{category_id}")
+async def admin_update_category(
+    category_id: str,
+    payload: CategoryUpdateInput,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+):
+    category = await db.categories.find_one({"id": category_id}, {"_id": 0})
+    if not category:
+        raise HTTPException(status_code=404, detail="Kategoria nie istnieje")
+
+    updates = payload.model_dump(exclude_none=True)
+    if "color" in updates and not ensure_hex_color(updates["color"]):
+        raise HTTPException(status_code=400, detail="Kolor musi być w formacie #RRGGBB")
+    updates["updated_at"] = now_utc()
+
+    await db.categories.update_one({"id": category_id}, {"$set": updates})
+    updated = await db.categories.find_one({"id": category_id}, {"_id": 0})
+
+    if "is_active" in updates:
+        if updates["is_active"] is False:
+            await hide_listings_for_category_slug(category["slug"])
+        elif updates["is_active"] is True:
+            await restore_listings_for_category_slug(category["slug"])
+
+    await write_audit_log(
+        admin_id=admin["id"],
+        action="update_category",
+        target_type="category",
+        target_id=category_id,
+        reason="Edycja kategorii",
+        old_value=category,
+        new_value=updated,
+        request=request,
+    )
+    return updated
+
+
+@api_router.delete("/admin/categories/{category_id}")
+async def admin_delete_category(
+    category_id: str,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+):
+    category = await db.categories.find_one({"id": category_id}, {"_id": 0})
+    if not category:
+        raise HTTPException(status_code=404, detail="Kategoria nie istnieje")
+
+    if category.get("slug") == "inne":
+        raise HTTPException(status_code=400, detail="Nie można usunąć kategorii 'inne'")
+
+    await hide_listings_for_category_slug(category["slug"])
+    await db.categories.delete_one({"id": category_id})
+
+    await write_audit_log(
+        admin_id=admin["id"],
+        action="delete_category",
+        target_type="category",
+        target_id=category_id,
+        reason="Usunięcie kategorii",
+        old_value=category,
+        new_value=None,
+        request=request,
+    )
+    return {"message": "Kategoria usunięta, oferty ukryte do decyzji admina"}
+
+
+@api_router.post("/admin/categories/reorder")
+async def admin_reorder_categories(
+    payload: CategoryReorderInput,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+):
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Brak danych do reorder")
+
+    ids = [item.id for item in payload.items]
+    existing = await db.categories.find({"id": {"$in": ids}}, {"_id": 0}).to_list(500)
+    if len(existing) != len(ids):
+        raise HTTPException(status_code=400, detail="Niektóre kategorie nie istnieją")
+
+    old_snapshot = [{"id": item["id"], "sort_order": item.get("sort_order", 1000)} for item in existing]
+    for item in payload.items:
+        await db.categories.update_one(
+            {"id": item.id},
+            {"$set": {"sort_order": item.sort_order, "updated_at": now_utc()}},
+        )
+
+    new_snapshot = await db.categories.find({"id": {"$in": ids}}, {"_id": 0}).to_list(500)
+    await write_audit_log(
+        admin_id=admin["id"],
+        action="reorder_categories",
+        target_type="category",
+        target_id="bulk",
+        reason="Zmiana kolejności kategorii",
+        old_value=old_snapshot,
+        new_value=[{"id": item["id"], "sort_order": item.get("sort_order", 1000)} for item in new_snapshot],
+        request=request,
+    )
+    return {"message": "Kolejność kategorii zaktualizowana"}
 
 
 @api_router.post("/admin/platform-wallets")

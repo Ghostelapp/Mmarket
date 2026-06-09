@@ -30,17 +30,20 @@ export default function AdminPage() {
   const [disputes, setDisputes] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
   const [wallets, setWallets] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [newCategory, setNewCategory] = useState({ name: "", slug: "", icon: "apps-outline", color: "#00f3ff", sort_order: 100 });
   const [error, setError] = useState("");
 
   const loadAll = async (accessToken: string) => {
-    const [d, u, l, di, rp, wa, al] = await Promise.all([
+    const [d, u, l, di, rp, wa, ca, al] = await Promise.all([
       request("/admin/dashboard", accessToken),
       request("/admin/users", accessToken),
       request("/admin/listings", accessToken),
       request("/admin/disputes", accessToken),
       request("/admin/reports", accessToken),
       request("/admin/platform-wallets", accessToken),
+      request("/admin/categories", accessToken),
       request("/admin/audit-logs", accessToken),
     ]);
     setDashboard(d);
@@ -49,6 +52,7 @@ export default function AdminPage() {
     setDisputes(di);
     setReports(rp);
     setWallets(wa);
+    setCategories(ca);
     setAuditLogs(al);
   };
 
@@ -175,6 +179,80 @@ export default function AdminPage() {
       </section>
 
       <section className="grid grid-2">
+        <div className="panel grid" style={{ gap: 10 }}>
+          <div className="row"><h3>Kategorie produktów</h3><button className="btn" onClick={() => loadAll(token)}>Odśwież</button></div>
+          <div className="grid" style={{ gap: 8 }}>
+            <input className="input" placeholder="Nazwa" value={newCategory.name} onChange={(e) => setNewCategory((v) => ({ ...v, name: e.target.value }))} />
+            <input className="input" placeholder="Slug" value={newCategory.slug} onChange={(e) => setNewCategory((v) => ({ ...v, slug: e.target.value }))} />
+            <input className="input" placeholder="Ikona" value={newCategory.icon} onChange={(e) => setNewCategory((v) => ({ ...v, icon: e.target.value }))} />
+            <input className="input" placeholder="#RRGGBB" value={newCategory.color} onChange={(e) => setNewCategory((v) => ({ ...v, color: e.target.value }))} />
+            <input className="input" placeholder="Kolejność" type="number" value={newCategory.sort_order} onChange={(e) => setNewCategory((v) => ({ ...v, sort_order: Number(e.target.value) || 0 }))} />
+            <button
+              className="btn"
+              onClick={async () => {
+                await request("/admin/categories", token, "POST", newCategory);
+                setNewCategory({ name: "", slug: "", icon: "apps-outline", color: "#00f3ff", sort_order: 100 });
+                await loadAll(token);
+              }}
+            >
+              Dodaj kategorię
+            </button>
+          </div>
+
+          {categories.map((cat) => (
+            <div key={cat.id} className="row" style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+              <div>
+                <strong>{cat.name}</strong>
+                <p className="muted" style={{ margin: 0 }}>{cat.slug} • {cat.icon} • {cat.color} • sort {cat.sort_order}</p>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    await request(`/admin/categories/${cat.id}`, token, "PATCH", {
+                      is_active: !cat.is_active,
+                    });
+                    await loadAll(token);
+                  }}
+                >
+                  {cat.is_active ? "Ukryj" : "Aktywuj"}
+                </button>
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    await request(`/admin/categories/${cat.id}`, token, "PATCH", {
+                      sort_order: (cat.sort_order || 100) - 1,
+                    });
+                    await loadAll(token);
+                  }}
+                >
+                  ↑
+                </button>
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    await request(`/admin/categories/${cat.id}`, token, "PATCH", {
+                      sort_order: (cat.sort_order || 100) + 1,
+                    });
+                    await loadAll(token);
+                  }}
+                >
+                  ↓
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={async () => {
+                    await request(`/admin/categories/${cat.id}`, token, "DELETE");
+                    await loadAll(token);
+                  }}
+                >
+                  Usuń
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
         <div className="panel grid" style={{ gap: 10 }}>
           <h3>Wallet Risk & Platform Wallets</h3>
           {wallets.map((wallet) => (
