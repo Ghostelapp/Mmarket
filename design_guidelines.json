@@ -1,0 +1,90 @@
+{
+  "theme": "dark",
+  "archetype": "7 (Electric & Neon)",
+  "vibe": "Synthwave pixel & Cyber neon pixel, retro-futuristic, high-contrast, glowing. A nostalgic 8-bit aesthetic upgraded with modern sleekness.",
+  "colors": {
+    "background": "#050509",
+    "surface": "#0f0f15",
+    "surface_glass": "rgba(15, 15, 21, 0.75)",
+    "primary": "#ff00ff",
+    "primary_hover": "#ff4dff",
+    "secondary": "#00f3ff",
+    "accent_green": "#39ff14",
+    "text_primary": "#f0f0f0",
+    "text_secondary": "#a1a1aa",
+    "border": "rgba(0, 243, 255, 0.25)",
+    "border_glow": "rgba(255, 0, 255, 0.5)"
+  },
+  "typography": {
+    "fonts_to_import": "https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap",
+    "headings": {
+      "font_family": "'Press Start 2P', system-ui, monospace",
+      "usage": "Use sparingly for Main App Logo, Auth Titles, or Top-level Section Headers. It is extremely wide on mobile.",
+      "styling": "uppercase, tracking-tight, text-shadow-sm for glowing effect"
+    },
+    "body_and_subheadings": {
+      "font_family": "'VT323', monospace",
+      "usage": "Primary font for almost all UI elements, marketplace items, deal room chats, inputs, and standard text to satisfy 'full pixel-font everywhere' while keeping readability on mobile.",
+      "styling": "tracking-normal, leading-relaxed, slightly larger base size (text-lg) as VT323 renders small"
+    },
+    "scale": {
+      "h1": "text-2xl sm:text-3xl",
+      "h2": "text-xl sm:text-2xl",
+      "body": "text-xl (VT323 is small, so text-xl acts as normal base)",
+      "small": "text-base"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Grid-based, modular, reminiscent of 8-bit game HUDs combined with modern dense dashboards. Mobile-first layout.",
+    "corners": "Mix of square (rounded-none) for main structural containers/cards, and slightly rounded (rounded-sm or max 4px) for inner inputs, chat bubbles, and buttons.",
+    "borders": "Visible 1px or 2px solid borders. Colored with subtle neon (cyan or dark magenta) to separate elements instead of relying solely on background shifts.",
+    "padding": "Compact spacing (p-3 to p-4) for marketplace lists and chat. Generous (p-6) for Auth and Profile security panels."
+  },
+  "motion_and_interactions": {
+    "philosophy": "Delicate and subtle, per user request. No harsh screen-shaking glitches.",
+    "hover_active_states": "Slight neon text-shadow glow increase, border color shift from cyan to hot pink.",
+    "transitions": "Fast, crisp transitions (150ms ease-in-out). Feels responsive and mechanical.",
+    "micro_interactions": "Subtle scanline shimmer on active cards or buttons. Focus states on forms add a 2px neon ring (focus:ring-cyan-500)."
+  },
+  "component_guidelines": {
+    "buttons": "Square or slightly rounded (2px) corners, 1px solid border, neon text. Primary buttons use solid neon background with dark text (#050509).",
+    "inputs_and_forms": "Dark background (#050509), 1px solid border (border-cyan-500/30). Focus adds neon glow.",
+    "cards": "Surface dark background, 1px subtle neon border. For listing items, use a compact bento grid or horizontal list with a thumbnail on the left.",
+    "navigation": "Bottom sticky nav for mobile. Frosted glass dark background (bg-[#0f0f15]/80 backdrop-blur-md) with glowing active icons.",
+    "deal_room_chat": "Chat bubbles should be slightly rounded (rounded-md) with high-contrast text. Sender (Primary color border), Receiver (Secondary color border).",
+    "shadcn_overrides": "Override Shadcn default border radius to 0.125rem. Override font-sans to VT323. Replace Vercel-like subtle gray borders with neon-tinted dark borders."
+  },
+  "media_and_assets": {
+    "image_urls": [
+      {
+        "url": "https://images.unsplash.com/photo-1769120062361-0a6469f5d7b3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxzeW50aHdhdmUlMjBuZW9uJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3ODEwNDY5NzB8MA&ixlib=rb-4.1.0&q=85",
+        "category": "hero_background",
+        "description": "Pink neon grid. Use as a subtle low-opacity background for Auth screens or Profile header backdrop."
+      },
+      {
+        "url": "https://images.pexels.com/photos/8107821/pexels-photo-8107821.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "avatar",
+        "description": "Futuristic cyber woman portrait. Ideal for Deal Room chat avatars or Profile picture placeholder."
+      },
+      {
+        "url": "https://images.pexels.com/photos/8107857/pexels-photo-8107857.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "avatar",
+        "description": "Striking cyberpunk portrait with neon lights. Another chat avatar placeholder for Deal Room."
+      }
+    ],
+    "icons": "Use 'lucide-react' but apply styling to fit the blocky aesthetic if possible, or standard clean lines. Emphasize with neon stroke colors."
+  },
+  "accessibility": {
+    "contrast": "Ensure text over neon backgrounds uses dark void (#050509) for APCA compliance.",
+    "motion": "Respect prefers-reduced-motion. Disable glitch or pulse effects if user prefers reduced motion."
+  },
+  "testing": "All interactive elements MUST have data-testid attributes (e.g., data-testid='auth-submit-button', data-testid='marketplace-search-input').",
+  "instructions_to_main_agent": [
+    "Apply Archetype 7 (Electric & Neon) across Auth screens, Marketplace, Create Listing flow, Deal Room, and Profile panels.",
+    "Import Google Fonts: 'Press Start 2P' and 'VT323'. Map them in tailwind.config.js to your font-sans and font-mono.",
+    "Use VT323 for 90% of the app to satisfy 'pixel font everywhere' while ensuring it fits on mobile web app displays.",
+    "Customize Shadcn components heavily: strip gradients, add 1px neon borders, set --radius to 2px, set --background to #050509.",
+    "Keep animations very delicate per user request (fast transitions, subtle hover glows, no aggressive screen tearing).",
+    "Implement 'data-testid' on all interactive elements without fail."
+  ]
+}
