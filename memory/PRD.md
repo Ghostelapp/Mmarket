@@ -41,6 +41,7 @@ Zbudować legalny privacy-first marketplace P2P crypto-only z escrow, E2EE, alia
 - Upload pipeline: `POST /listings/{id}/images/upload` z EXIF-safe processing, thumbnail, AV feature flag, private R2 integration (feature flag)
 - Stabilizacja marketplace: fix timezone compare dla promoted sorting w `/listings`
 - Pixel redesign (user screens only): synthwave + cyber neon, pełny pixel look (Press Start 2P + VT323), delikatne animacje, hero/banner base64, pixel avatary, neon border system, poprawione touch targets (>=44px) i testID coverage dla nav/auth/filter.
+- Admin categories module: pełny CRUD + reorder, pola name/slug/icon/color/sort_order/is_active, automatyczne ukrywanie ofert po wyłączeniu/usunięciu kategorii, user widzi tylko aktywne kategorie (`/categories`).
 
 ## Prioritized backlog
 ### P0

@@ -240,6 +240,7 @@ class ListingUpdateInput(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     price_fiat: Optional[float] = Field(default=None, gt=0)
+    category: Optional[str] = None
     condition: Optional[str] = None
     location_public: Optional[str] = None
     shipping_options: Optional[List[str]] = None
