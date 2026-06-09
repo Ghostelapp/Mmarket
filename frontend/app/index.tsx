@@ -126,9 +126,6 @@ function PixelButton({
           backgroundColor,
           opacity: pressed || disabled ? 0.82 : 1,
           transform: [{ scale: pressed ? 0.98 : 1 }],
-          shadowColor: color,
-          shadowOpacity: pressed ? 0.12 : 0.2,
-          shadowRadius: pressed ? 3 : 6,
         },
       ]}
     >
@@ -230,6 +227,7 @@ function AuthScreen() {
               {(["login", "register"] as const).map((option) => (
                 <Pressable
                   key={option}
+                  testID={`auth-mode-${option}`}
                   onPress={() => setMode(option)}
                   style={[styles.segmentBtn, mode === option && styles.segmentBtnActive]}
                 >
@@ -359,11 +357,16 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
           onChangeText={setSearch}
         />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-          <Pressable style={[styles.filterChip, filter === "all" && styles.filterChipActive]} onPress={() => setFilter("all")}>
+          <Pressable
+            testID="filter-all"
+            style={[styles.filterChip, filter === "all" && styles.filterChipActive]}
+            onPress={() => setFilter("all")}
+          >
             <Text style={styles.filterText}>Wszystkie</Text>
           </Pressable>
           {categories.map((cat) => (
             <Pressable
+              testID={`filter-category-${cat}`}
               key={cat}
               style={[styles.filterChip, filter === cat && styles.filterChipActive]}
               onPress={() => setFilter(cat)}
@@ -1238,7 +1241,12 @@ export default function Index() {
 
         <View style={[styles.navBar, { paddingBottom: Math.max(10, insets.bottom) }]}> 
           {tabs.map((entry) => (
-            <Pressable key={entry.key} onPress={() => setTab(entry.key)} style={styles.navBtn}>
+            <Pressable
+              testID={`nav-${entry.key}`}
+              key={entry.key}
+              onPress={() => setTab(entry.key)}
+              style={styles.navBtn}
+            >
               <Ionicons
                 name={entry.icon}
                 size={20}
@@ -1283,8 +1291,6 @@ const styles = StyleSheet.create({
     fontFamily: "PressStart2P_400Regular",
     color: theme.text,
     textTransform: "uppercase",
-    textShadowColor: theme.neonViolet,
-    textShadowRadius: 6,
   },
   h2: {
     fontSize: 18,
@@ -1292,8 +1298,6 @@ const styles = StyleSheet.create({
     color: theme.text,
     marginBottom: 6,
     textTransform: "uppercase",
-    textShadowColor: theme.neonBlue,
-    textShadowRadius: 4,
   },
   subtitle: {
     color: theme.textMuted,
@@ -1308,9 +1312,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     gap: 10,
-    shadowColor: theme.neonBlue,
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
   },
   panelSoft: {
     backgroundColor: theme.panelSoft,
@@ -1358,7 +1359,7 @@ const styles = StyleSheet.create({
   segmentBtn: {
     flex: 1,
     borderRadius: 2,
-    minHeight: 42,
+    minHeight: 44,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1396,7 +1397,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     borderRadius: 4,
-    minHeight: 34,
+    minHeight: 44,
     justifyContent: "center",
     paddingHorizontal: 12,
     backgroundColor: "#111827",
