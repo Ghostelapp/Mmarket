@@ -30,13 +30,13 @@ Zbudować legalny privacy-first marketplace P2P crypto-only z escrow, E2EE, alia
 - Backend FastAPI: admin endpoints (dashboard/users/listings/transactions/disputes/reports/fees/platform-wallets/audit/moderation/ban/resolve)
 - Mobile Expo: pixel-style full marketplace UI with tabs (Market/Sell/Deal Room/Profile/Admin)
 - Mobile Expo: biometric auth check, security panel, privacy shield, panic lock action
-- Mobile Expo: E2EE client-side encrypt/decrypt helper for deal room chat
+- Mobile Expo: E2EE Deal Room przez X25519, koperty klucza pokoju i NaCl secretbox
 - Admin web Next.js: login + dashboard + moderation + dispute actions + wallets + audit log views
-- Smart contract: `smart_contract_escrow.sol` with create/fund/ship/confirm/openDispute/resolve/cancel and fee split
+- Smart contract: `contracts/contracts/MaskMarketplaceEscrow.sol` with create/fund/ship/confirm/openDispute/resolve/cancel and fee split
 - Security hardening: JWT secret fail-fast from env, removed admin credential prefill in web panel
 - QA closure: added testID coverage to key mobile controls and working `/admin` fallback route in Expo preview
 - WebAuthn upgrade: pełne challenge/options/verify (`/auth/passkey/register/options`, `/auth/passkey/register`, `/auth/passkey/login/options`, `/auth/passkey/login`)
-- On-chain architecture: Alchemy RPC + webhook endpoint (`/crypto/webhooks/alchemy`) z podpisem HMAC; fallback mode gdy klucze ENV nieustawione
+- On-chain architecture: Alchemy RPC + webhook endpoint (`/crypto/webhooks/alchemy`) z podpisem HMAC; brak niejawnego fallbacku produkcyjnego
 - Promotions: pakiety Basic/Boost z crypto payment intent + confirm (`/listings/{id}/promote-intent`, `/listings/{id}/promote-confirm`)
 - Upload pipeline: `POST /listings/{id}/images/upload` z EXIF-safe processing, thumbnail, AV feature flag, private R2 integration (feature flag)
 - Stabilizacja marketplace: fix timezone compare dla promoted sorting w `/listings`
@@ -48,6 +48,8 @@ Zbudować legalny privacy-first marketplace P2P crypto-only z escrow, E2EE, alia
 ### P0
 - Real passkey WebAuthn attestation + challenge verification
 - Real chain indexer/webhooks for on-chain confirmation
+- Integracja walleta z `createOrder`/`fundOrder` i weryfikacja zdarzeń escrow
+- Niezależny audyt kryptograficzny protokołu E2EE Deal Room
 - Real EXIF stripping + file scanning pipeline
 - Push notifications integration
 

@@ -28,7 +28,8 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "viewport": "width=375, initial-scale=1, user-scalable=no"
     },
     "plugins": [
       "expo-router",

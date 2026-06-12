@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BrowserProvider, Contract } from "ethers";
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
 
@@ -19,6 +20,31 @@ async function request(path: string, token: string, method: string = "GET", body
   return data;
 }
 
+async function resolveDisputeOnchain(dispute: any, releaseSeller: boolean): Promise<string> {
+  const ethereum = (window as typeof window & { ethereum?: any }).ethereum;
+  if (!ethereum) throw new Error("Podłącz portfel arbitra w przeglądarce.");
+  const tx = dispute.transaction;
+  if (!tx?.escrow_receiver || !tx?.escrow_reference) {
+    throw new Error("Spór nie ma konfiguracji escrow.");
+  }
+  await ethereum.request({ method: "eth_requestAccounts" });
+  if (tx.chain_id) {
+    await ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: `0x${Number(tx.chain_id).toString(16)}` }],
+    });
+  }
+  const signer = await new BrowserProvider(ethereum).getSigner();
+  const escrow = new Contract(
+    tx.escrow_receiver,
+    ["function resolve(bytes32 orderRef, bool releaseSeller)"],
+    signer,
+  );
+  const resolution = await escrow.resolve(tx.escrow_reference, releaseSeller);
+  await resolution.wait(tx.min_confirmations || 2);
+  return resolution.hash;
+}
+
 export default function AdminPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,16 +61,25 @@ export default function AdminPage() {
   const [newCategory, setNewCategory] = useState({ name: "", slug: "", icon: "apps-outline", color: "#00f3ff", sort_order: 100 });
   const [error, setError] = useState("");
 
+  const runAction = async (action: () => Promise<void>) => {
+    try {
+      setError("");
+      await action();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Operacja nie powiodła się");
+    }
+  };
+
   const loadAll = async (accessToken: string) => {
     const [d, u, l, di, rp, wa, ca, al] = await Promise.all([
       request("/admin/dashboard", accessToken),
-      request("/admin/users", accessToken),
-      request("/admin/listings", accessToken),
-      request("/admin/disputes", accessToken),
-      request("/admin/reports", accessToken),
+      request("/admin/users?limit=100&offset=0", accessToken),
+      request("/admin/listings?limit=100&offset=0", accessToken),
+      request("/admin/disputes?limit=100&offset=0", accessToken),
+      request("/admin/reports?limit=100&offset=0", accessToken),
       request("/admin/platform-wallets", accessToken),
       request("/admin/categories", accessToken),
-      request("/admin/audit-logs", accessToken),
+      request("/admin/audit-logs?limit=100&offset=0", accessToken),
     ]);
     setDashboard(d);
     setUsers(u);
@@ -110,9 +145,26 @@ export default function AdminPage() {
         <div className="panel"><p className="muted">Otwarte spory</p><h2>{dashboard?.open_disputes || 0}</h2></div>
       </section>
 
+      <section className="panel grid" style={{ gap: 8 }}>
+        <div className="row">
+          <h3>Przychód prowizyjny</h3>
+          <span className="muted">system: {dashboard?.system_status || "unknown"}</span>
+        </div>
+        {(dashboard?.commission_revenue_by_asset || []).length ? (
+          dashboard.commission_revenue_by_asset.map((item: any) => (
+            <div key={`${item.network}:${item.token}`} className="row">
+              <strong>{item.network} / {item.token}</strong>
+              <span>{item.amount} ({item.transactions} transakcji)</span>
+            </div>
+          ))
+        ) : (
+          <span className="muted">Brak potwierdzonych prowizji on-chain.</span>
+        )}
+      </section>
+
       <section className="grid grid-2">
         <div className="panel grid" style={{ gap: 10 }}>
-          <div className="row"><h3>Moderacja ofert</h3><button className="btn" onClick={() => loadAll(token)}>Odśwież</button></div>
+          <div className="row"><h3>Moderacja ofert</h3><button className="btn" onClick={() => runAction(() => loadAll(token))}>Odśwież</button></div>
           {listings.slice(0, 8).map((listing) => (
             <div key={listing.id} className="row" style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
               <div>
@@ -122,25 +174,25 @@ export default function AdminPage() {
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className="btn"
-                  onClick={async () => {
+                  onClick={() => runAction(async () => {
                     await request(`/admin/listings/${listing.id}/moderate`, token, "POST", {
                       action: "approve",
                       reason: "Ręczne zatwierdzenie",
                     });
                     await loadAll(token);
-                  }}
+                  })}
                 >
                   Approve
                 </button>
                 <button
                   className="btn btn-danger"
-                  onClick={async () => {
+                  onClick={() => runAction(async () => {
                     await request(`/admin/listings/${listing.id}/moderate`, token, "POST", {
                       action: "reject",
                       reason: "Narusza zasady",
                     });
                     await loadAll(token);
-                  }}
+                  })}
                 >
                   Reject
                 </button>
@@ -158,18 +210,36 @@ export default function AdminPage() {
                 <p className="muted" style={{ margin: 0 }}>status: {dispute.status}</p>
               </div>
               {dispute.status === "OPEN" ? (
-                <button
-                  className="btn"
-                  onClick={async () => {
-                    await request(`/admin/disputes/${dispute.id}/resolve`, token, "POST", {
-                      decision: "refund_buyer",
-                      reason: "Dowody po stronie kupującego",
-                    });
-                    await loadAll(token);
-                  }}
-                >
-                  Refund buyer
-                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="btn"
+                    onClick={() => runAction(async () => {
+                      const onchainTxHash = await resolveDisputeOnchain(dispute, false);
+                      await request(`/admin/disputes/${dispute.id}/resolve`, token, "POST", {
+                        decision: "refund_buyer",
+                        reason: "Dowody po stronie kupującego",
+                        onchain_tx_hash: onchainTxHash,
+                      });
+                      await loadAll(token);
+                    })}
+                  >
+                    Refund buyer
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => runAction(async () => {
+                      const onchainTxHash = await resolveDisputeOnchain(dispute, true);
+                      await request(`/admin/disputes/${dispute.id}/resolve`, token, "POST", {
+                        decision: "release_seller",
+                        reason: "Dowody po stronie sprzedającego",
+                        onchain_tx_hash: onchainTxHash,
+                      });
+                      await loadAll(token);
+                    })}
+                  >
+                    Release seller
+                  </button>
+                </div>
               ) : (
                 <span className="muted">resolved</span>
               )}
@@ -180,7 +250,7 @@ export default function AdminPage() {
 
       <section className="grid grid-2">
         <div className="panel grid" style={{ gap: 10 }}>
-          <div className="row"><h3>Kategorie produktów</h3><button className="btn" onClick={() => loadAll(token)}>Odśwież</button></div>
+          <div className="row"><h3>Kategorie produktów</h3><button className="btn" onClick={() => runAction(() => loadAll(token))}>Odśwież</button></div>
           <div className="grid" style={{ gap: 8 }}>
             <input className="input" placeholder="Nazwa" value={newCategory.name} onChange={(e) => setNewCategory((v) => ({ ...v, name: e.target.value }))} />
             <input className="input" placeholder="Slug" value={newCategory.slug} onChange={(e) => setNewCategory((v) => ({ ...v, slug: e.target.value }))} />
@@ -189,11 +259,11 @@ export default function AdminPage() {
             <input className="input" placeholder="Kolejność" type="number" value={newCategory.sort_order} onChange={(e) => setNewCategory((v) => ({ ...v, sort_order: Number(e.target.value) || 0 }))} />
             <button
               className="btn"
-              onClick={async () => {
+              onClick={() => runAction(async () => {
                 await request("/admin/categories", token, "POST", newCategory);
                 setNewCategory({ name: "", slug: "", icon: "apps-outline", color: "#00f3ff", sort_order: 100 });
                 await loadAll(token);
-              }}
+              })}
             >
               Dodaj kategorię
             </button>
@@ -208,43 +278,43 @@ export default function AdminPage() {
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className="btn"
-                  onClick={async () => {
+                  onClick={() => runAction(async () => {
                     await request(`/admin/categories/${cat.id}`, token, "PATCH", {
                       is_active: !cat.is_active,
                     });
                     await loadAll(token);
-                  }}
+                  })}
                 >
                   {cat.is_active ? "Ukryj" : "Aktywuj"}
                 </button>
                 <button
                   className="btn"
-                  onClick={async () => {
+                  onClick={() => runAction(async () => {
                     await request(`/admin/categories/${cat.id}`, token, "PATCH", {
                       sort_order: (cat.sort_order || 100) - 1,
                     });
                     await loadAll(token);
-                  }}
+                  })}
                 >
                   ↑
                 </button>
                 <button
                   className="btn"
-                  onClick={async () => {
+                  onClick={() => runAction(async () => {
                     await request(`/admin/categories/${cat.id}`, token, "PATCH", {
                       sort_order: (cat.sort_order || 100) + 1,
                     });
                     await loadAll(token);
-                  }}
+                  })}
                 >
                   ↓
                 </button>
                 <button
                   className="btn btn-danger"
-                  onClick={async () => {
+                  onClick={() => runAction(async () => {
                     await request(`/admin/categories/${cat.id}`, token, "DELETE");
                     await loadAll(token);
-                  }}
+                  })}
                 >
                   Usuń
                 </button>

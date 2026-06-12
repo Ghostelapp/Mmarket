@@ -10,7 +10,11 @@ export default function Root({ children }: PropsWithChildren) {
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
         <meta
           name="viewport"
-          content="width=device-width, initial-scale=1, shrink-to-fit=no"
+          content="width=375, initial-scale=1, user-scalable=no, viewport-fit=cover"
+        />
+        <meta
+          httpEquiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https: http://localhost:* ws://localhost:* wss:; base-uri 'self'; form-action 'self'; object-src 'none'"
         />
         {/*
           Disable body scrolling on web to make ScrollView components work correctly.
@@ -21,7 +25,19 @@ export default function Root({ children }: PropsWithChildren) {
         <style
           dangerouslySetInnerHTML={{
             __html: `
-              body > div:first-child { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; }
+              html, body {
+                height: 100%;
+                margin: 0;
+                padding: 0;
+              }
+              body > div:first-child {
+                width: 375px;
+                height: 100vh;
+                max-height: 800px;
+                position: relative !important;
+                overflow: hidden;
+                margin: 0 auto;
+              }
               [role="tablist"] [role="tab"] * { overflow: visible !important; }
               [role="heading"], [role="heading"] * { overflow: visible !important; }
             `,
@@ -31,10 +47,10 @@ export default function Root({ children }: PropsWithChildren) {
       <body
         style={{
           margin: 0,
+          padding: 0,
           height: "100%",
           overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
+          backgroundColor: "#000",
         }}
       >
         {children}

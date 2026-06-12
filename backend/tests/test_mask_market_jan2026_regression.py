@@ -1,5 +1,6 @@
 import io
 import time
+import uuid
 
 import requests
 from PIL import Image
@@ -75,7 +76,16 @@ def test_passkey_login_options_and_verify_error_contract(base_url, api_client, m
         json={"email": user["register"]["email"]},
         timeout=30,
     )
-    assert no_passkeys_options.status_code == 400
+    assert no_passkeys_options.status_code == 200
+    assert no_passkeys_options.json()["public_key"]["allowCredentials"]
+
+    unknown_account_options = api_client.post(
+        f"{base_url}/api/auth/passkey/login/options",
+        json={"email": f"missing-{uuid.uuid4().hex}@example.com"},
+        timeout=30,
+    )
+    assert unknown_account_options.status_code == 200
+    assert unknown_account_options.json().keys() == no_passkeys_options.json().keys()
 
     no_challenge_verify = api_client.post(
         f"{base_url}/api/auth/passkey/login",
@@ -96,8 +106,8 @@ def test_passkey_login_options_and_verify_error_contract(base_url, api_client, m
         },
         timeout=30,
     )
-    assert no_challenge_verify.status_code == 400
-    assert "challenge" in no_challenge_verify.text.lower()
+    assert no_challenge_verify.status_code == 401
+    assert "logowanie passkey nieudane" in no_challenge_verify.text.lower()
 
 
 def _create_listing(base_url, api_client, token, title_suffix):
@@ -123,6 +133,7 @@ def _create_listing(base_url, api_client, token, title_suffix):
 
 
 def _pay_listing_fee(base_url, api_client, token, listing, tx_hash):
+    tx_hash = f"{tx_hash}-{uuid.uuid4().hex}"
     resp = api_client.post(
         f"{base_url}/api/listings/{listing['id']}/pay-listing-fee",
         headers={"Authorization": f"Bearer {token}"},
@@ -137,15 +148,15 @@ def _pay_listing_fee(base_url, api_client, token, listing, tx_hash):
     return resp
 
 
-# Listings + payments: OFFCHAIN fallback mode and verification_mode presence
-def test_listing_fee_confirmation_includes_verification_mode_offchain(base_url, api_client, make_user):
+# Listings + payments: explicit test simulation mode and verification_mode presence
+def test_listing_fee_confirmation_includes_verification_mode_test_simulation(base_url, api_client, make_user):
     seller = make_user("TEST_LISTING_FEE")
     listing = _create_listing(base_url, api_client, seller["access_token"], "fee")
 
     pay_fee = _pay_listing_fee(base_url, api_client, seller["access_token"], listing, "0xTESTLISTFEE202601")
     assert pay_fee.status_code == 200
     data = pay_fee.json()
-    assert data["verification_mode"] == "OFFCHAIN_FALLBACK"
+    assert data["verification_mode"] == "TEST_SIMULATION"
     assert data["listing"]["listing_fee"]["status"] == "PAID"
 
 
@@ -166,17 +177,32 @@ def test_promotion_flow_intent_confirm_activation(base_url, api_client, make_use
     )
     assert intent.status_code == 200
     intent_data = intent.json()
-    assert intent_data["verification_mode"] == "OFFCHAIN_FALLBACK"
+    assert intent_data["verification_mode"] == "UNAVAILABLE"
 
     confirm = api_client.post(
         f"{base_url}/api/listings/{listing['id']}/promote-confirm",
         headers={"Authorization": f"Bearer {token}"},
-        json={"intent_id": intent_data["id"], "tx_hash": "0xTESTPROMOCONFIRM202601"},
+        json={"intent_id": intent_data["id"], "tx_hash": f"0xTESTPROMOCONFIRM202601-{uuid.uuid4().hex}"},
         timeout=30,
     )
     assert confirm.status_code == 200, confirm.text
+    repeated_confirm = api_client.post(
+        f"{base_url}/api/listings/{listing['id']}/promote-confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"intent_id": intent_data["id"], "tx_hash": confirm.json()["listing"]["promotion"]["tx_hash"]},
+        timeout=30,
+    )
+    assert repeated_confirm.status_code == 200, repeated_confirm.text
     confirm_data = confirm.json()
-    assert confirm_data["verification_mode"] == "OFFCHAIN_FALLBACK"
+    assert (
+        repeated_confirm.json()["listing"]["promotion"]["starts_at"]
+        == confirm_data["listing"]["promotion"]["starts_at"]
+    )
+    assert (
+        repeated_confirm.json()["listing"]["promotion"]["ends_at"]
+        == confirm_data["listing"]["promotion"]["ends_at"]
+    )
+    assert confirm_data["verification_mode"] == "TEST_SIMULATION"
     assert confirm_data["listing"]["promotion"]["is_promoted"] is True
     assert confirm_data["listing"]["promotion"]["package_type"] == "basic"
 
@@ -203,7 +229,11 @@ def test_upload_pipeline_image_processing_metadata_and_thumbnail(base_url, api_c
     assert upload_data["scan_status"] == "AV_SCAN_DISABLED"
     assert upload_data["storage_provider"] in {"local", "r2"}
 
-    detail = api_client.get(f"{base_url}/api/listings/{listing['id']}", timeout=30)
+    detail = api_client.get(
+        f"{base_url}/api/listings/{listing['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
     assert detail.status_code == 200
     detail_data = detail.json()
     assert len(detail_data.get("processed_images", [])) >= 1
@@ -212,9 +242,61 @@ def test_upload_pipeline_image_processing_metadata_and_thumbnail(base_url, api_c
     assert first_img.get("original_key")
     assert first_img.get("scan_status") == "AV_SCAN_DISABLED"
 
+    if upload_data["storage_provider"] == "local":
+        raw_media_url = upload_data["thumb_signed_url"].split("?", 1)[0]
+        anonymous_media = requests.get(raw_media_url, timeout=30)
+        assert anonymous_media.status_code == 404
+        signed_media = requests.get(upload_data["thumb_signed_url"], timeout=30)
+        assert signed_media.status_code == 200
+        owner_media = requests.get(
+            raw_media_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert owner_media.status_code == 200
 
-# Crypto payment verification OFFCHAIN fallback when indexer disabled
-def test_crypto_payment_submit_and_status_offchain(base_url, api_client, make_user):
+    deleted = api_client.delete(
+        f"{base_url}/api/listings/{listing['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    assert deleted.status_code == 200, deleted.text
+    if upload_data["storage_provider"] == "local":
+        deleted_media = requests.get(upload_data["thumb_signed_url"], timeout=30)
+        assert deleted_media.status_code == 404
+
+    upload_after_delete = requests.post(
+        f"{base_url}/api/listings/{listing['id']}/images/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("test.jpg", buf.getvalue(), "image/jpeg")},
+        timeout=30,
+    )
+    assert upload_after_delete.status_code == 409
+
+
+def test_listing_create_rejects_empty_shipping_options(base_url, api_client, make_user):
+    seller = make_user("TEST_LISTING_VALIDATION")
+    response = api_client.post(
+        f"{base_url}/api/listings",
+        headers={"Authorization": f"Bearer {seller['access_token']}"},
+        json={
+            "title": "Valid listing title",
+            "description": "Valid listing description long enough for API validation.",
+            "price_fiat": 100,
+            "fiat_currency": "PLN",
+            "category": "elektronika",
+            "condition": "nowy",
+            "location_public": "Kraków",
+            "shipping_options": [],
+            "images": [],
+        },
+        timeout=30,
+    )
+    assert response.status_code == 422
+
+
+# Generic payment intents reject unsupported purposes.
+def test_crypto_payment_intent_rejects_unsupported_purpose(base_url, api_client, make_user):
     user = make_user("TEST_CRYPTO_PAY")
     token = user["access_token"]
 
@@ -230,29 +312,7 @@ def test_crypto_payment_submit_and_status_offchain(base_url, api_client, make_us
         },
         timeout=30,
     )
-    assert intent.status_code == 200, intent.text
-    intent_data = intent.json()
-    assert intent_data["verification_mode"] == "OFFCHAIN_FALLBACK"
-
-    submit = api_client.post(
-        f"{base_url}/api/crypto/payment/{intent_data['id']}/submit-tx",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"tx_hash": "0xTESTCRYPTOSUBMIT202601"},
-        timeout=30,
-    )
-    assert submit.status_code == 200, submit.text
-    submit_data = submit.json()
-    assert submit_data["intent"]["status"] == "CONFIRMED"
-    assert submit_data["intent"]["verification_mode"] == "OFFCHAIN_FALLBACK"
-
-    status = api_client.get(
-        f"{base_url}/api/crypto/payment/{intent_data['id']}/status",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
-    assert status.status_code == 200
-    status_data = status.json()
-    assert status_data["status"] == "CONFIRMED"
+    assert intent.status_code == 400, intent.text
 
 
 # Webhook security: missing/invalid Alchemy signatures must be rejected
@@ -296,7 +356,7 @@ def test_marketplace_listings_sort_supports_promoted_flag(base_url, api_client, 
     confirm = api_client.post(
         f"{base_url}/api/listings/{listing['id']}/promote-confirm",
         headers={"Authorization": f"Bearer {token}"},
-        json={"intent_id": intent_id, "tx_hash": "0xTESTSORTPROMO202601"},
+        json={"intent_id": intent_id, "tx_hash": f"0xTESTSORTPROMO202601-{uuid.uuid4().hex}"},
         timeout=30,
     )
     assert confirm.status_code == 200
