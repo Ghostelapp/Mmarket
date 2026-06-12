@@ -14,7 +14,9 @@ type RequestOptions = {
   auth?: boolean;
 };
 
-const refreshTokenIfNeeded = async () => {
+let refreshPromise: Promise<boolean> | null = null;
+
+const performTokenRefresh = async () => {
   const refresh = await storage.secureGet("mask_refresh", "");
   const sessionId = await storage.secureGet("mask_session_id", "");
   if (!refresh || !sessionId) return false;
@@ -29,6 +31,15 @@ const refreshTokenIfNeeded = async () => {
   await storage.secureSet("mask_access", data.access_token);
   await storage.secureSet("mask_refresh", data.refresh_token);
   return true;
+};
+
+const refreshTokenIfNeeded = async () => {
+  if (!refreshPromise) {
+    refreshPromise = performTokenRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 };
 
 export const setAuthSession = async (
@@ -47,6 +58,29 @@ export const clearAuthSession = async () => {
   await storage.secureRemove("mask_session_id");
 };
 
+export const apiUpload = async <T>(endpoint: string, formData: FormData): Promise<T> => {
+  const token = await storage.secureGet("mask_access", "");
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+  } catch {
+    throw new Error(`Backend jest niedostępny pod adresem ${API_BASE}`);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "Upload nieudany");
+  }
+  return data as T;
+};
+
 export const apiRequest = async <T>(
   endpoint: string,
   { method = "GET", body, auth = false }: RequestOptions = {},
@@ -60,22 +94,31 @@ export const apiRequest = async <T>(
     if (token) headers.Authorization = `Bearer ${token}`;
   }
 
-  let response = await fetch(`${API_BASE}${endpoint}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error(`Backend jest niedostępny pod adresem ${API_BASE}`);
+  }
 
   if (response.status === 401 && auth) {
     const refreshed = await refreshTokenIfNeeded();
     if (refreshed) {
       const nextToken = await storage.secureGet("mask_access", "");
       if (nextToken) headers.Authorization = `Bearer ${nextToken}`;
-      response = await fetch(`${API_BASE}${endpoint}`, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      try {
+        response = await fetch(`${API_BASE}${endpoint}`, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+      } catch {
+        throw new Error(`Backend jest niedostępny pod adresem ${API_BASE}`);
+      }
     }
   }
 

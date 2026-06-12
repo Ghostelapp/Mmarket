@@ -2,11 +2,66 @@
 // Helpers never throw: reads return `fallback`, writes return `false`.
 // Values supported: string | number | boolean | null (JSON-serialized on disk).
 // Usage: import { storage } from "@/src/utils/storage"; await storage.getItem(key, fallback);
-// No Keychain on web — secure* helpers reuse AsyncStorage (no expo-secure-store).
+// Sensitive values use an encrypted IndexedDB store backed by a non-extractable WebCrypto key.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { AssertNoExtras, StorageBase, StorageItemValue } from "./storage-base";
+
+const SECURE_DB = "mask-secure-storage";
+const SECURE_STORE = "secure";
+const SECURE_KEY_ID = "__device_key__";
+
+const openSecureDb = () =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    const request = globalThis.indexedDB.open(SECURE_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(SECURE_STORE);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+
+const secureRecord = <T,>(
+  mode: IDBTransactionMode,
+  action: (store: IDBObjectStore) => IDBRequest<T>,
+) =>
+  openSecureDb().then(
+    (db) =>
+      new Promise<T>((resolve, reject) => {
+        const transaction = db.transaction(SECURE_STORE, mode);
+        const request = action(transaction.objectStore(SECURE_STORE));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => db.close();
+        transaction.onerror = () => db.close();
+        transaction.onabort = () => db.close();
+      }),
+  );
+
+let deviceKeyPromise: Promise<CryptoKey> | null = null;
+
+const loadOrCreateSecureDeviceKey = async (): Promise<CryptoKey> => {
+  const existing = await secureRecord<CryptoKey | undefined>("readonly", (store) =>
+    store.get(SECURE_KEY_ID),
+  );
+  if (existing) return existing;
+  const generated = await globalThis.crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  await secureRecord("readwrite", (store) => store.put(generated, SECURE_KEY_ID));
+  return generated;
+};
+
+const secureDeviceKey = async (): Promise<CryptoKey> => {
+  if (!deviceKeyPromise) {
+    deviceKeyPromise = loadOrCreateSecureDeviceKey().catch((error) => {
+      deviceKeyPromise = null;
+      throw error;
+    });
+  }
+  return deviceKeyPromise;
+};
 
 export class Storage extends StorageBase {
   // General KV — backed by AsyncStorage (its built-in web shim uses IndexedDB).
@@ -46,23 +101,57 @@ export class Storage extends StorageBase {
     }
   }
 
-  // Browsers have no Keychain — secure* helpers fall through to AsyncStorage.
   async secureGet<Fallback extends StorageItemValue>(
     key: string,
     fallback: Fallback,
   ): Promise<Fallback | null> {
-    return this.getItem(key, fallback);
+    try {
+      const record = await secureRecord<{ iv: ArrayBuffer; ciphertext: ArrayBuffer } | undefined>(
+        "readonly",
+        (store) => store.get(key),
+      );
+      if (!record) return fallback;
+      const decrypted = await globalThis.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+        await secureDeviceKey(),
+        record.ciphertext,
+      );
+      return this.retrieve(new TextDecoder().decode(decrypted), fallback);
+    } catch (e) {
+      this.warn("secureGet", key, e);
+      return fallback;
+    }
   }
 
   async secureSet<Value extends StorageItemValue>(
     key: string,
     value: Value,
   ): Promise<boolean> {
-    return this.setItem(key, value);
+    try {
+      const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = await globalThis.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        await secureDeviceKey(),
+        new TextEncoder().encode(JSON.stringify(value)),
+      );
+      await secureRecord("readwrite", (store) =>
+        store.put({ iv: iv.buffer as ArrayBuffer, ciphertext }, key),
+      );
+      return true;
+    } catch (e) {
+      this.warn("secureSet", key, e);
+      return false;
+    }
   }
 
   async secureRemove(key: string): Promise<boolean> {
-    return this.removeItem(key);
+    try {
+      await secureRecord("readwrite", (store) => store.delete(key));
+      return true;
+    } catch (e) {
+      this.warn("secureRemove", key, e);
+      return false;
+    }
   }
 }
 

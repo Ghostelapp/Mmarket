@@ -1,0 +1,18 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "deployer": "0xb776261A252799eB77185e2926B77628c7c68e63",
+  "contractAdmin": "0xb776261A252799eB77185e2926B77628c7c68e63",
+  "platformFeeWallet": "0xb776261A252799eB77185e2926B77628c7c68e63",
+  "arbiter": "0xb776261A252799eB77185e2926B77628c7c68e63",
+  "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "mockUsdc": null,
+  "paymentRouter": "0x84734803C7455104142aB8f0AF785B12c6456b57",
+  "paymentRouterDeploymentTx": "0x0ffe6fe3cb5443793d7d7860548ac98820ae74cc2bc9b51e88fdcd9e15404a7c",
+  "paymentRouterDeploymentBlock": 42761840,
+  "paymentRouterCodeHash": "0x17306a7539e604f26f89b541b247c1491f59c2032d3a0afa901434c50b4ab10f",
+  "escrow": "0xFe544E0CBd691F40Ad6dD3C6fd5C1452B6665021",
+  "escrowDeploymentTx": "0x8d8081fea927397fbc2c693208fabc9f91f019ac3aa8575ef8dac94425f52465",
+  "escrowDeploymentBlock": 42761841,
+  "escrowCodeHash": "0x027dad49debfdada4bc43a0738d30b83dd22ac60df944fe47780b2f38087163b"
+}

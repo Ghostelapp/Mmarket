@@ -18,14 +18,23 @@ type LoginPayload = {
   device_name?: string;
 };
 
+type WalletLoginPayload = {
+  wallet_address: string;
+  challenge_id: string;
+  signature: string;
+  device_name?: string;
+};
+
 type AuthContextType = {
   user: User | null;
   ready: boolean;
   login: (payload: LoginPayload) => Promise<void>;
   loginWithPasskey: (email: string, credential: unknown, deviceName?: string) => Promise<void>;
+  loginWithWallet: (payload: WalletLoginPayload) => Promise<void>;
   register: (payload: RegisterPayload) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  setUser: (user: User | null) => void;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,6 +52,7 @@ export const AuthProvider = ({ children }: PropsWithChildren) => {
       privacy_level: me.privacy_level || 70,
       two_fa_enabled: !!me.two_fa_enabled,
       public_trust_level: me.public_trust_level || "starter",
+      wallets: me.wallets || [],
     });
   }, []);
 
@@ -71,6 +81,19 @@ export const AuthProvider = ({ children }: PropsWithChildren) => {
         email,
         credential,
         device_name: deviceName,
+      },
+    });
+    await setAuthSession(data.access_token, data.refresh_token, data.session_id);
+    setUser(data.user);
+    await storage.setItem("mask_alias", data.user.alias);
+  }, []);
+
+  const loginWithWallet = useCallback(async (payload: WalletLoginPayload) => {
+    const data = await apiRequest<AuthSession>("/auth/wallet/login", {
+      method: "POST",
+      body: {
+        ...payload,
+        device_name: payload.device_name || "web-wallet",
       },
     });
     await setAuthSession(data.access_token, data.refresh_token, data.session_id);
@@ -110,8 +133,8 @@ export const AuthProvider = ({ children }: PropsWithChildren) => {
   }, [refreshProfile]);
 
   const value = useMemo(
-    () => ({ user, ready, login, loginWithPasskey, register, logout, refreshProfile }),
-    [user, ready, login, loginWithPasskey, register, logout, refreshProfile],
+    () => ({ user, ready, login, loginWithPasskey, loginWithWallet, register, logout, refreshProfile, setUser: (u: User | null) => setUser(u) }),
+    [user, ready, login, loginWithPasskey, loginWithWallet, register, logout, refreshProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

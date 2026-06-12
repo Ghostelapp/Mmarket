@@ -5,6 +5,10 @@ export type User = {
   privacy_level: number;
   two_fa_enabled: boolean;
   public_trust_level: string;
+  wallets?: {
+    address: string;
+    is_primary?: boolean;
+  }[];
 };
 
 export type AuthSession = {
@@ -32,6 +36,12 @@ export type Listing = {
   location_public: string;
   status: string;
   moderation_status: string;
+  images?: {
+    type: string;
+    image_id?: string;
+    thumb_signed_url?: string | null;
+    original_signed_url?: string | null;
+  }[];
   promotion?: {
     is_promoted: boolean;
     package_type: "basic" | "boost" | null;
@@ -47,6 +57,9 @@ export type Listing = {
     amount: number;
     token: string;
     network: string;
+    receiver_wallet: string;
+    payment_reference?: string;
+    payment_router_contract?: string;
     status: string;
   };
   seller_public?: {
@@ -86,14 +99,21 @@ export type Transaction = {
   buyer_alias: string;
   seller_alias: string;
   deal_room_id: string;
+  escrow_receiver: string;
+  escrow_reference: string;
+  seller_wallet: string;
   created_at: string;
 };
 
 export type EncryptedMessage = {
   id: string;
+  client_message_id?: string;
   sender_id: string;
   ciphertext: string;
   nonce: string;
+  key_id?: string;
+  encryption_version?: "nacl-secretbox-v1";
   message_type: "text" | "image" | "file";
   created_at: string;
+  plaintext?: string;
 };

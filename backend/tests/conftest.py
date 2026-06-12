@@ -27,9 +27,13 @@ def api_client() -> requests.Session:
 
 @pytest.fixture(scope="session")
 def admin_credentials() -> dict:
+    email = os.environ.get("TEST_ADMIN_EMAIL")
+    password = os.environ.get("TEST_ADMIN_PASSWORD")
+    if not email or not password:
+        pytest.skip("TEST_ADMIN_EMAIL and TEST_ADMIN_PASSWORD are not set")
     return {
-        "email": "admin@maskmarket.io",
-        "password": "MaskAdmin!2026",
+        "email": email,
+        "password": password,
         "device_name": "pytest-admin",
     }
 
@@ -50,10 +54,11 @@ def admin_auth(base_url: str, api_client: requests.Session, admin_credentials: d
 
 def unique_user_payload(prefix: str = "TEST_USER") -> dict:
     suffix = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    alias_prefix = prefix[:12]
     return {
         "email": f"{prefix.lower()}_{suffix}@example.com",
         "password": "TEST_Passw0rd!2026",
-        "alias": f"TEST_{prefix}_{suffix[:8]}",
+        "alias": f"TEST_{alias_prefix}_{suffix[:8]}",
         "public_location": "TEST_Warszawa",
     }
 

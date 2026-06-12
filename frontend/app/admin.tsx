@@ -65,7 +65,11 @@ export default function AdminWebRoute() {
           <Text style={styles.kv}>Users: {dashboard?.users || 0}</Text>
           <Text style={styles.kv}>Listings: {dashboard?.listings || 0}</Text>
           <Text style={styles.kv}>Open disputes: {dashboard?.open_disputes || 0}</Text>
-          <Text style={styles.kv}>Revenue: {dashboard?.commission_revenue_crypto || 0} USDC</Text>
+          {(dashboard?.commission_revenue_by_asset || []).map((item: any) => (
+            <Text key={`${item.network}:${item.token}`} style={styles.kv}>
+              Revenue: {item.amount} {item.token} / {item.network}
+            </Text>
+          ))}
         </View>
       )}
     </ScrollView>

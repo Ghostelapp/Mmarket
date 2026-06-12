@@ -52,6 +52,7 @@ def _create_listing(base_url, api_client, token: str, category_slug: str, title_
 
 
 def _pay_listing_fee(base_url, api_client, token: str, listing: dict, tx_hash: str) -> dict:
+    tx_hash = f"{tx_hash}-{uuid.uuid4().hex}"
     response = api_client.post(
         f"{base_url}/api/listings/{listing['id']}/pay-listing-fee",
         headers={"Authorization": f"Bearer {token}"},
@@ -187,7 +188,11 @@ def test_category_disable_reenable_and_delete_affects_linked_listings(base_url, 
     )
     assert hide.status_code == 200
 
-    listing_after_hide = api_client.get(f"{base_url}/api/listings/{listing['id']}", timeout=30)
+    listing_after_hide = api_client.get(
+        f"{base_url}/api/listings/{listing['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
     assert listing_after_hide.status_code == 200
     hidden_data = listing_after_hide.json()
     assert hidden_data["status"] == "HIDDEN_CATEGORY"
@@ -201,7 +206,11 @@ def test_category_disable_reenable_and_delete_affects_linked_listings(base_url, 
     )
     assert activate.status_code == 200
 
-    listing_after_activate = api_client.get(f"{base_url}/api/listings/{listing['id']}", timeout=30)
+    listing_after_activate = api_client.get(
+        f"{base_url}/api/listings/{listing['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
     assert listing_after_activate.status_code == 200
     restored_data = listing_after_activate.json()
     assert restored_data["status"] == "UNDER_REVIEW"
@@ -217,7 +226,11 @@ def test_category_disable_reenable_and_delete_affects_linked_listings(base_url, 
     )
     assert delete.status_code == 200, delete.text
 
-    listing2_after_delete = api_client.get(f"{base_url}/api/listings/{listing2['id']}", timeout=30)
+    listing2_after_delete = api_client.get(
+        f"{base_url}/api/listings/{listing2['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
     assert listing2_after_delete.status_code == 200
     deleted_policy_data = listing2_after_delete.json()
     assert deleted_policy_data["status"] == "HIDDEN_CATEGORY"

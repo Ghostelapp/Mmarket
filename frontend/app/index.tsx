@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import * as ImagePicker from "expo-image-picker";
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFonts } from "expo-font";
@@ -23,16 +24,27 @@ import { VT323_400Regular } from "@expo-google-fonts/vt323";
 
 import { useAuth } from "@/src/context/AuthContext";
 import { theme } from "@/src/constants/theme";
-import { apiRequest } from "@/src/lib/api";
-import { e2eeDecrypt, e2eeEncrypt } from "@/src/lib/crypto";
+import { apiRequest, apiUpload } from "@/src/lib/api";
+import {
+  fundEscrowWithWallet,
+  linkCurrentWallet,
+  payListingFeeWithWallet,
+  runEscrowActionWithWallet,
+} from "@/src/lib/blockchain";
+import {
+  decryptChatMessage,
+  encryptChatMessage,
+  getOrCreateRoomKey,
+} from "@/src/lib/crypto";
 import { useBiometricAuth } from "@/src/hooks/useBiometricAuth";
 import { Category, EncryptedMessage, Listing, Transaction } from "@/src/types";
+import { storage } from "@/src/utils/storage";
 
 const fallbackCategories = [
   { slug: "elektronika", name: "elektronika" },
   { slug: "moda", name: "moda" },
   { slug: "dom", name: "dom" },
-  { slug: "motoryzacja", name: "motoryzacja" },
+  { slug: "motoryzacja", name: "motorykacja" },
   { slug: "sport", name: "sport" },
   { slug: "dziecko", name: "dziecko" },
   { slug: "kolekcje", name: "kolekcje" },
@@ -41,8 +53,25 @@ const fallbackCategories = [
   { slug: "inne", name: "inne" },
 ];
 
-const base64PixelBlue =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+const listingConditions = ["nowy", "jak nowy", "bardzo dobry", "dobry", "używany"];
+const listingShippingOptions = ["blind-delivery", "punkt partnerski", "odbiór osobisty"];
+
+const isValidEmail = (email: string): boolean => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email.trim());
+};
+
+const getPasswordStrength = (password: string): { level: number; label: string; color: string } => {
+  if (password.length === 0) return { level: 0, label: "", color: theme.textMuted };
+  if (password.length < 6) return { level: 1, label: "Słabe", color: theme.danger };
+  if (password.length < 10) return { level: 2, label: "Średnie", color: theme.warning };
+  if (password.length < 14) return { level: 3, label: "Dobre", color: theme.neonBlue };
+  return { level: 4, label: "Silne", color: theme.neonGreen };
+};
+
+const getListingCover = (listing: Listing): string | null =>
+  listing.images?.find((image) => image.thumb_signed_url)?.thumb_signed_url || null;
+
 const pixelHeroImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAACqUlEQVR42u2av0vDQBTHX0ujGCitDg52qAWRiuCoiENn/wLB3dFZqLP9Bzq6K/0jBDuJqyDt5uTioEihUgV1iJQz9yOXS95rm74b5O71crn3ue99LwnmykubwEVf8oyAATEgBsSAGBADymop+IUyU2AFJVAQ3tAL+Q/KTD6/l1hB2VKQYUmfB/duY1aKe8SAcmvFXcr7OaOZFCZEQOxB8+FB5fw6wW0e3zsYw26XjsZ1H2et87NLB3VkilNsCL2gUivtECyDD1vsQdl6DvJhi2ALyGbECsqKgobQo3Ef9qCMPgc9vnUoMzlYPmMFZcuDKA0IANbgkBWULQU9vT+wB7GC2INYIxEKqnobSENX4fTq5YQmjePVy5l8F8ObN9ldED3obtQGgFqpjU5oBACwv3jKHpStU0xcUiQzItjCRArCyITG4NA9SHgsStuMRlrBsgfRlRxc3zAFE6Bm5RYAWv0GADTrXfE3ZdAcl4O6eKvf+CmqJjQAXTz5HWOl88+Dgp9DXZVBMR4atFnv6mYsl2a9mxv8db54bui6nVe6BhDKoqMTF80/BUVepgvaT2WqgjZotKeYWU0hKSn1lVBcKcrEfl1jH/M6TPbgIidh2c0yHyUdZ+HwKRbzFLNUdQi/MmJoOnRIPqaDahwBuUFxyAdvNBdAnufyn2tfr0MA8FZ8y+a4jtc0z4H6XSy48XgSumZQ8VZ8MZNQM9aqGOikjiaRgsxqiqxbdkt4Ob+LkZxiyRWkE5SoLOUim4OxLklxT6F/DwpNWq6MPcjSjJTs5DWYsQ9mciZikg4+bZbYLG0x3aaTj7CgomxG9sEWDsUnV6WaxL8yDqVqRChkwuFTbJq2mHnThXafXBdlOC+ADJgMm3TuANlgmiCaaQGkwzRxNNMFCOM9M5XyC133SEKfnMOXAAAAAElFTkSuQmCC";
 const pixelAvatarA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAAzUlEQVR42u2YwQqDMBBEp0FQUfBg7vb/vy231lpP7WEhiEqySaPBspLDYNTnbOIsiL4b8PjQOFPf+m6Y3k8AAOqqPUe/jFHIdAj4/8FFxD3jbEjo6k66KfWxji2SeT6NY/t0669GS5qmxtnwrasfva5ehW89rNQRa5kA7KUuyy7fsYBDwN5dE5RiaZLrQMduH9tQSxmZTaltNK6aRES8KG9tLYyzxsvrL96Ptx3JrSVABCxgAedPrt3G4NCXdUzxy8znXS2bKzsYuX43fQEhdPNsCWNwiAAAAABJRU5ErkJggg==";
 const pixelAvatarB = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAArUlEQVR42u2XPQqAMAyFGxEUHBx09wje/xjew1XQKQ5CBwshqWKCTcb+hZeveaUw9FPQCMCAXTN+nHU71ioohVpicMZfRZ2xZ97hNrK0+EfGUWiqj5h6ypg+Og6mFN7pY0KQFLNtxlcBOZqYK92rLfYxBx7/KogZE23K72AZY9oipM5lmLG0gEwvM/8eS32YUyfbjPMUG2XsXu2MC2VckldnfIr8f2yNMWBAlcQnEwN0jlIzfBsAAAAASUVORK5CYII=";
@@ -82,6 +111,17 @@ const adaptLoginOptions = (publicKey: any) => ({
 
 type TabKey = "market" | "sell" | "deals" | "profile" | "admin";
 
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<any>;
+};
+
+type PendingListingImage = {
+  uri: string;
+  fileName: string;
+  mimeType: string;
+  file?: File;
+};
+
 type AdminDashboard = {
   users: number;
   listings: number;
@@ -89,7 +129,13 @@ type AdminDashboard = {
   open_disputes: number;
   open_reports: number;
   suspicious_accounts: number;
-  commission_revenue_crypto: number;
+  commission_revenue_crypto: number | null;
+  commission_revenue_by_asset: {
+    network: string;
+    token: string;
+    amount: number;
+    transactions: number;
+  }[];
   system_status: string;
 };
 
@@ -144,18 +190,64 @@ function Tag({ value }: { value: string }) {
 }
 
 function AuthScreen() {
-  const { register, login, loginWithPasskey } = useAuth();
+  const { register, login, loginWithPasskey, loginWithWallet } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [alias, setAlias] = useState("CipherFox");
-  const [location, setLocation] = useState("Warszawa");
+  const [alias, setAlias] = useState("");
+  const [location, setLocation] = useState("");
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [emailError, setEmailError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [walletAddress, setWalletAddress] = useState("");
+  const [authActionStatus, setAuthActionStatus] = useState("");
+
+  useEffect(() => {
+    const loadSavedEmail = async () => {
+      const saved = await storage.getItem("mask_saved_email", "");
+      if (saved) setEmail(saved);
+    };
+    loadSavedEmail();
+  }, []);
+
+  const validateEmail = (value: string): boolean => {
+    if (!value.trim()) {
+      setEmailError("E-mail jest wymagany");
+      return false;
+    }
+    if (!isValidEmail(value)) {
+      setEmailError("Nieprawidłowy format e-maila");
+      return false;
+    }
+    setEmailError("");
+    return true;
+  };
+
+  const validatePassword = (value: string): boolean => {
+    if (!value) {
+      setPasswordError("Hasło jest wymagane");
+      return false;
+    }
+    if (value.length < 8) {
+      setPasswordError("Hasło musi mieć min. 8 znaków");
+      return false;
+    }
+    setPasswordError("");
+    return true;
+  };
 
   const onSubmit = async () => {
+    const emailValid = validateEmail(email);
+    const passwordValid = validatePassword(password);
+
+    if (!emailValid || !passwordValid) return;
+
     try {
       setBusy(true);
+      await storage.setItem("mask_saved_email", email.trim());
+
       if (mode === "register") {
         await register({ email, password, alias, public_location: location });
       } else {
@@ -168,27 +260,103 @@ function AuthScreen() {
     }
   };
 
-  const webPasskeyLogin = async () => {
-    if (typeof window === "undefined" || !("credentials" in navigator)) {
-      Alert.alert("Passkey", "Passkey dostępny tylko w web preview/przeglądarce.");
-      return;
-    }
-    if (!email.trim()) {
-      Alert.alert("Passkey", "Podaj e-mail.");
+  const walletLogin = async () => {
+    setAuthActionStatus("Sprawdzam dostępność portfela...");
+    const ethereum =
+      typeof window === "undefined"
+        ? undefined
+        : (window as typeof window & { ethereum?: EthereumProvider }).ethereum;
+    if (!ethereum) {
+      const message =
+        Platform.OS === "web"
+          ? "Nie wykryto MetaMask. Otwórz aplikację w przeglądarce z aktywnym rozszerzeniem MetaMask."
+          : "Logowanie portfelem wymaga przeglądarki web z MetaMask. Expo Go nie udostępnia window.ethereum.";
+      setAuthActionStatus(message);
+      Alert.alert("Crypto Wallet", message);
       return;
     }
 
     try {
       setBusy(true);
+      setAuthActionStatus("Wybierz konto w MetaMask...");
+      const accounts: string[] = await ethereum.request({
+        method: "eth_requestAccounts",
+      });
+      if (!accounts || accounts.length === 0) {
+        throw new Error("Nie wybrano konta");
+      }
+      const address = accounts[0];
+      setWalletAddress(address);
+      const chainIdHex: string = await ethereum.request({ method: "eth_chainId" });
+
+      setAuthActionStatus("Pobieram jednorazowy challenge z backendu...");
+      const challenge = await apiRequest<{ challenge_id: string; message: string }>("/auth/wallet/challenge", {
+        method: "POST",
+        body: { wallet_address: address, chain_id: Number.parseInt(chainIdHex, 16) },
+      });
+      setAuthActionStatus("Podpisz wiadomość logowania w MetaMask...");
+      const signature: string = await ethereum.request({
+        method: "personal_sign",
+        params: [challenge.message, address],
+      });
+
+      setAuthActionStatus("Weryfikuję podpis...");
+      await loginWithWallet({
+        wallet_address: address,
+        challenge_id: challenge.challenge_id,
+        signature,
+        device_name: "web-wallet",
+      });
+      setAuthActionStatus("Zalogowano portfelem.");
+      Alert.alert("Sukces", `Zalogowano jako ${address.slice(0, 6)}…${address.slice(-4)}`);
+    } catch (error: any) {
+      const message =
+        error?.code === 4001
+          ? "Anulowano operację w MetaMask."
+          : error?.message || "Logowanie przez wallet nieudane";
+      setAuthActionStatus(message);
+      Alert.alert("Crypto Wallet", message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const webPasskeyLogin = async () => {
+    setAuthActionStatus("Sprawdzam dostępność passkey...");
+    if (typeof window === "undefined" || !("credentials" in navigator)) {
+      const message = "Passkey jest dostępny tylko w obsługiwanej przeglądarce web.";
+      setAuthActionStatus(message);
+      Alert.alert("Passkey", message);
+      return;
+    }
+    if (!window.isSecureContext) {
+      const message = "Passkey wymaga bezpiecznego HTTPS albo localhost.";
+      setAuthActionStatus(message);
+      Alert.alert("Passkey", message);
+      return;
+    }
+    if (!email.trim()) {
+      const message = "Najpierw podaj e-mail konta, do którego wcześniej dodano passkey.";
+      setAuthActionStatus(message);
+      setEmailError("E-mail jest wymagany do logowania passkey");
+      Alert.alert("Passkey", message);
+      return;
+    }
+
+    try {
+      setBusy(true);
+      setAuthActionStatus("Pobieram challenge passkey z backendu...");
       const optionsData = await apiRequest<any>("/auth/passkey/login/options", {
         method: "POST",
         body: { email: email.trim() },
       });
       const publicKey = adaptLoginOptions(optionsData.public_key);
+      setAuthActionStatus("Potwierdź passkey w systemowym oknie przeglądarki...");
       const credential = await (navigator as any).credentials.get({ publicKey });
       if (!credential) throw new Error("Brak danych passkey");
 
       const response = (credential as any).response;
+      setAuthActionStatus("Weryfikuję passkey...");
       await loginWithPasskey(email.trim(), {
         id: (credential as any).id,
         rawId: toBase64Url((credential as any).rawId),
@@ -201,8 +369,14 @@ function AuthScreen() {
           userHandle: response.userHandle ? toBase64Url(response.userHandle) : null,
         },
       });
+      setAuthActionStatus("Zalogowano za pomocą passkey.");
     } catch (error: any) {
-      Alert.alert("Passkey", error?.message || "Logowanie passkey nieudane");
+      const message =
+        error?.name === "NotAllowedError"
+          ? "Anulowano passkey albo przeglądarka nie znalazła pasującego klucza."
+          : error?.message || "Logowanie passkey nieudane";
+      setAuthActionStatus(message);
+      Alert.alert("Passkey", message);
     } finally {
       setBusy(false);
     }
@@ -241,23 +415,59 @@ function AuthScreen() {
             <View style={styles.panel}>
               <TextInput
                 testID="auth-email"
-                style={styles.input}
+                style={[styles.input, emailError ? { borderColor: theme.danger } : null]}
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 placeholder="E-mail"
                 placeholderTextColor={theme.textMuted}
+                onBlur={() => validateEmail(email)}
               />
-              <TextInput
-                testID="auth-password"
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                placeholder="Hasło"
-                placeholderTextColor={theme.textMuted}
-              />
+              {emailError ? <Text style={styles.errorText}>{emailError}</Text> : null}
+
+              <View style={styles.passwordRow}>
+                <TextInput
+                  testID="auth-password"
+                  style={[styles.input, { flex: 1 }, passwordError ? { borderColor: theme.danger } : null]}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  placeholder="Hasło"
+                  placeholderTextColor={theme.textMuted}
+                  onBlur={() => validatePassword(password)}
+                />
+                <Pressable
+                  testID="auth-toggle-password"
+                  onPress={() => setShowPassword(!showPassword)}
+                  style={styles.eyeBtn}
+                >
+                  <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color={theme.textMuted} />
+                </Pressable>
+              </View>
+              {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
+
+              {password.length > 0 && (
+                <View style={styles.strengthRow}>
+                  {[1, 2, 3, 4].map((level) => {
+                    const strength = getPasswordStrength(password);
+                    return (
+                      <View
+                        key={level}
+                        style={[
+                          styles.strengthBar,
+                          {
+                            backgroundColor: level <= strength.level ? strength.color : theme.border,
+                          },
+                        ]}
+                      />
+                    );
+                  })}
+                  <Text style={[styles.strengthText, { color: getPasswordStrength(password).color }]}>
+                    {getPasswordStrength(password).label}
+                  </Text>
+                </View>
+              )}
 
               {mode === "register" && (
                 <>
@@ -308,6 +518,19 @@ function AuthScreen() {
                   disabled={busy}
                 />
               )}
+              <PixelButton
+                testID="auth-wallet-login"
+                label={walletAddress ? `Wallet: ${walletAddress.slice(0, 6)}…` : "Crypto Wallet"}
+                icon="wallet-outline"
+                variant="secondary"
+                onPress={walletLogin}
+                disabled={busy}
+              />
+              {authActionStatus ? (
+                <Text testID="auth-action-status" style={styles.authActionStatus}>
+                  {authActionStatus}
+                </Text>
+              ) : null}
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -423,6 +646,9 @@ function MarketplaceTab({ onBuy }: { onBuy: (listing: Listing) => Promise<void> 
           contentContainerStyle={{ gap: 12, paddingBottom: 140 }}
           renderItem={({ item, index }) => (
             <Animated.View entering={FadeInDown.delay(index * 40).duration(360)} style={styles.panel}>
+              {getListingCover(item) ? (
+                <Image source={{ uri: getListingCover(item) as string }} style={styles.marketplaceImage} />
+              ) : null}
               <View style={styles.rowBetween}>
                 <Text style={styles.cardTitle}>{item.title}</Text>
                 <Tag value={item.status} />
@@ -481,10 +707,17 @@ function SellTab() {
   const [category, setCategory] = useState("");
   const [condition, setCondition] = useState("nowy");
   const [location, setLocation] = useState("Kraków");
-  const [feeInfo, setFeeInfo] = useState<{ listingId: string; amount: number; token: string; network: string } | null>(
+  const [shippingOptions, setShippingOptions] = useState<string[]>(["blind-delivery"]);
+  const [pendingImages, setPendingImages] = useState<PendingListingImage[]>([]);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [formTouched, setFormTouched] = useState(false);
+  const [feeInfo, setFeeInfo] = useState<{ listingId: string; amount: number; token: string; network: string; receiverWallet: string; paymentReference?: string; paymentRouterContract?: string } | null>(
     null,
   );
+  const [listingFeeTxHash, setListingFeeTxHash] = useState("");
+  const [promotionTxHash, setPromotionTxHash] = useState("");
   const [busy, setBusy] = useState(false);
+  const [plnToUsdcRate, setPlnToUsdcRate] = useState(0);
   const [lastPaidListingId, setLastPaidListingId] = useState<string | null>(null);
   const [promotionIntent, setPromotionIntent] = useState<null | {
     intentId: string;
@@ -492,6 +725,8 @@ function SellTab() {
     packageType: "basic" | "boost";
     network: "Base" | "Polygon";
     amount: number;
+    paymentReference: string;
+    paymentRouterContract: string;
   }>(null);
 
   useEffect(() => {
@@ -515,24 +750,126 @@ function SellTab() {
       }
     };
     loadCategories();
+    apiRequest<any>("/crypto/rates")
+      .then((data) => setPlnToUsdcRate(Number(data?.rates?.PLN_to_USDC) || 0))
+      .catch(() => setPlnToUsdcRate(0));
   }, []);
 
+  const normalizedPrice = Number(price.replace(",", "."));
+  const selectedCategory = categories.find((item) => item.slug === category);
+  const estimatedUsdc =
+    Number.isFinite(normalizedPrice) && normalizedPrice > 0
+      ? Math.round(normalizedPrice * (currency === "EUR" ? 1 : plnToUsdcRate) * 100) / 100
+      : 0;
+  const formErrors = {
+    title:
+      title.trim().length < 4
+        ? "Tytuł musi mieć minimum 4 znaki."
+        : title.trim().length > 120
+          ? "Tytuł może mieć maksymalnie 120 znaków."
+          : "",
+    description:
+      description.trim().length < 15
+        ? "Opis musi mieć minimum 15 znaków."
+        : description.trim().length > 2000
+          ? "Opis może mieć maksymalnie 2000 znaków."
+          : "",
+    price:
+      !Number.isFinite(normalizedPrice) || normalizedPrice <= 0
+        ? "Podaj poprawną cenę większą od zera."
+        : "",
+    category: category ? "" : "Wybierz kategorię.",
+    location: location.trim().length < 2 ? "Podaj przybliżoną lokalizację." : "",
+    shipping: shippingOptions.length === 0 ? "Wybierz przynajmniej jedną metodę dostawy." : "",
+  };
+  const formErrorList = Object.values(formErrors).filter(Boolean);
+  const completedFields = [
+    !formErrors.title,
+    !formErrors.description,
+    !formErrors.price,
+    !formErrors.category,
+    !formErrors.location,
+    !formErrors.shipping,
+  ].filter(Boolean).length;
+  const formProgress = Math.round((completedFields / 6) * 100);
+  const toggleShippingOption = (option: string) => {
+    setShippingOptions((current) =>
+      current.includes(option) ? current.filter((item) => item !== option) : [...current, option],
+    );
+  };
+
+  const pickListingImages = async () => {
+    if (pendingImages.length >= 10) {
+      Alert.alert("Zdjęcia", "Możesz dodać maksymalnie 10 zdjęć.");
+      return;
+    }
+    if (Platform.OS !== "web") {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Zdjęcia", "Aplikacja potrzebuje dostępu do biblioteki zdjęć.");
+        return;
+      }
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.9,
+    });
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    setPendingImages((current) => [
+      ...current,
+      {
+        uri: asset.uri,
+        fileName: asset.fileName || `listing-${Date.now()}.jpg`,
+        mimeType: asset.mimeType || "image/jpeg",
+        file: asset.file || undefined,
+      },
+    ]);
+  };
+
+  const uploadListingImages = async (listingId: string) => {
+    for (let index = 0; index < pendingImages.length; index += 1) {
+      const image = pendingImages[index];
+      setUploadStatus(`Wysyłam zdjęcie ${index + 1}/${pendingImages.length}...`);
+      const formData = new FormData();
+      if (Platform.OS === "web" && image.file) {
+        formData.append("file", image.file, image.fileName);
+      } else {
+        formData.append("file", {
+          uri: image.uri,
+          name: image.fileName,
+          type: image.mimeType,
+        } as any);
+      }
+      await apiUpload(`/listings/${listingId}/images/upload`, formData);
+    }
+    setUploadStatus(pendingImages.length ? "Zdjęcia zostały przetworzone i zapisane." : "");
+  };
+
   const createListing = async () => {
+    setFormTouched(true);
+    if (formErrorList.length > 0) {
+      Alert.alert("Uzupełnij ofertę", formErrorList[0]);
+      return;
+    }
     try {
       setBusy(true);
       const listing = await apiRequest<Listing>("/listings", {
         method: "POST",
         auth: true,
         body: {
-          title,
-          description,
-          price_fiat: Number(price),
+          title: title.trim(),
+          description: description.trim(),
+          price_fiat: normalizedPrice,
           fiat_currency: currency,
           category,
           condition,
-          location_public: location,
-          shipping_options: ["blind-delivery", "punkt partnerski"],
-          images: [base64PixelBlue],
+          location_public: location.trim(),
+          shipping_options: shippingOptions,
+          images: [],
         },
       });
       setFeeInfo({
@@ -540,8 +877,18 @@ function SellTab() {
         amount: listing.listing_fee.amount,
         token: listing.listing_fee.token,
         network: listing.listing_fee.network,
+        receiverWallet: listing.listing_fee.receiver_wallet,
+        paymentReference: listing.listing_fee.payment_reference,
+        paymentRouterContract: listing.listing_fee.payment_router_contract,
       });
-      Alert.alert("Oferta utworzona", "Aby opublikować, opłać listing fee.");
+      try {
+        await uploadListingImages(listing.id);
+        Alert.alert("Oferta utworzona", "Zdjęcia zapisano. Aby opublikować, opłać listing fee.");
+      } catch (error: any) {
+        const message = error?.message || "Nie udało się wysłać wszystkich zdjęć";
+        setUploadStatus(`Oferta została utworzona, ale upload zdjęć nie powiódł się: ${message}`);
+        Alert.alert("Oferta utworzona bez części zdjęć", message);
+      }
     } catch (error: any) {
       Alert.alert("Błąd", error?.message || "Nie udało się dodać oferty");
     } finally {
@@ -549,7 +896,7 @@ function SellTab() {
     }
   };
 
-  const payListingFee = async () => {
+  const confirmListingFee = async (txHash: string) => {
     if (!feeInfo) return;
     try {
       setBusy(true);
@@ -560,20 +907,51 @@ function SellTab() {
           amount: feeInfo.amount,
           token: feeInfo.token,
           network: feeInfo.network,
-          payment_tx_hash: `0xLISTING${Date.now()}`,
+          payment_tx_hash: txHash,
         },
       });
       Alert.alert("Sukces", "Opłata potwierdzona, oferta aktywna lub w moderacji.");
       setLastPaidListingId(feeInfo.listingId);
       setFeeInfo(null);
+      setListingFeeTxHash("");
       setTitle("");
       setDescription("");
       setPrice("99");
+      setShippingOptions(["blind-delivery"]);
+      setPendingImages([]);
+      setUploadStatus("");
+      setFormTouched(false);
     } catch (error: any) {
       Alert.alert("Błąd", error?.message || "Płatność nieudana");
     } finally {
       setBusy(false);
     }
+  };
+
+  const payListingFee = async () => {
+    if (!feeInfo) return;
+    try {
+      setBusy(true);
+      const txHash = await payListingFeeWithWallet({
+        network: feeInfo.network,
+        amount: feeInfo.amount,
+        reference: feeInfo.paymentReference || "",
+        routerAddress: feeInfo.paymentRouterContract,
+      });
+      setListingFeeTxHash(txHash);
+      await confirmListingFee(txHash);
+    } catch (error: any) {
+      Alert.alert("Błąd portfela", error?.shortMessage || error?.message || "Płatność nieudana");
+      setBusy(false);
+    }
+  };
+
+  const confirmManualListingFee = async () => {
+    if (!listingFeeTxHash.trim()) {
+      Alert.alert("Brak transakcji", "Wklej hash wykonanej transakcji USDC.");
+      return;
+    }
+    await confirmListingFee(listingFeeTxHash.trim());
   };
 
   const createPromotionIntent = async (packageType: "basic" | "boost") => {
@@ -598,6 +976,8 @@ function SellTab() {
         packageType,
         network: "Base",
         amount: intent.amount,
+        paymentReference: intent.payment_reference,
+        paymentRouterContract: intent.payment_router_contract,
       });
       Alert.alert("Promocja", `Intent gotowy: ${intent.amount} USDC (${packageType.toUpperCase()})`);
     } catch (error: any) {
@@ -607,19 +987,48 @@ function SellTab() {
 
   const confirmPromotion = async () => {
     if (!promotionIntent) return;
+    if (!promotionTxHash.trim()) {
+      Alert.alert("Brak transakcji", "Wklej hash wykonanej transakcji USDC.");
+      return;
+    }
     try {
       await apiRequest(`/listings/${promotionIntent.listingId}/promote-confirm`, {
         method: "POST",
         auth: true,
         body: {
           intent_id: promotionIntent.intentId,
-          tx_hash: `0xPROMO${Date.now()}`,
+          tx_hash: promotionTxHash.trim(),
         },
       });
       Alert.alert("Sukces", "Promowana oferta aktywna.");
       setPromotionIntent(null);
+      setPromotionTxHash("");
     } catch (error: any) {
       Alert.alert("Błąd", error?.message || "Potwierdzenie promocji nieudane");
+    }
+  };
+
+  const payPromotion = async () => {
+    if (!promotionIntent) return;
+    try {
+      const txHash = await payListingFeeWithWallet({
+        network: promotionIntent.network,
+        amount: promotionIntent.amount,
+        reference: promotionIntent.paymentReference,
+        routerAddress: promotionIntent.paymentRouterContract,
+        purpose: 1,
+      });
+      setPromotionTxHash(txHash);
+      await apiRequest(`/listings/${promotionIntent.listingId}/promote-confirm`, {
+        method: "POST",
+        auth: true,
+        body: { intent_id: promotionIntent.intentId, tx_hash: txHash },
+      });
+      Alert.alert("Sukces", "Promowana oferta aktywna.");
+      setPromotionIntent(null);
+      setPromotionTxHash("");
+    } catch (error: any) {
+      Alert.alert("Błąd portfela", error?.shortMessage || error?.message || "Płatność promocji nieudana");
     }
   };
 
@@ -629,24 +1038,49 @@ function SellTab() {
       <Text style={styles.h2}>Dodaj ofertę</Text>
       <Text style={styles.subtitle}>Listing fee w crypto aktywuje publikację</Text>
       <View style={styles.panel}>
-        <TextInput testID="sell-title" style={styles.input} value={title} onChangeText={setTitle} placeholder="Tytuł" placeholderTextColor={theme.textMuted} />
+        <View style={styles.rowBetween}>
+          <Text style={styles.cardTitle}>Kompletność oferty</Text>
+          <Tag value={`${formProgress}%`} />
+        </View>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${formProgress}%` }]} />
+        </View>
+
+        <Text style={styles.formLabel}>Podstawowe informacje</Text>
+        <TextInput
+          testID="sell-title"
+          style={[styles.input, formTouched && formErrors.title ? styles.inputError : null]}
+          value={title}
+          onChangeText={setTitle}
+          placeholder="Np. Mechaniczna klawiatura Keychron K2"
+          placeholderTextColor={theme.textMuted}
+          maxLength={120}
+        />
+        <Text style={styles.fieldMeta}>{title.trim().length}/120 znaków</Text>
+        {formTouched && formErrors.title ? <Text style={styles.errorText}>{formErrors.title}</Text> : null}
         <TextInput
           testID="sell-description"
-          style={[styles.input, { minHeight: 88 }]}
+          style={[styles.input, styles.descriptionInput, formTouched && formErrors.description ? styles.inputError : null]}
           value={description}
           onChangeText={setDescription}
-          placeholder="Opis"
+          placeholder="Opisz stan, najważniejsze cechy, zestaw i ewentualne wady."
           placeholderTextColor={theme.textMuted}
           multiline
+          maxLength={2000}
+          textAlignVertical="top"
         />
+        <Text style={styles.fieldMeta}>{description.trim().length}/2000 znaków</Text>
+        {formTouched && formErrors.description ? <Text style={styles.errorText}>{formErrors.description}</Text> : null}
+
+        <Text style={styles.formLabel}>Cena</Text>
         <TextInput
           testID="sell-price"
-          style={styles.input}
+          style={[styles.input, formTouched && formErrors.price ? styles.inputError : null]}
           value={price}
           onChangeText={setPrice}
-          placeholder="Cena"
+          placeholder="Cena sprzedaży"
           placeholderTextColor={theme.textMuted}
-          keyboardType="numeric"
+          keyboardType="decimal-pad"
         />
 
         <View style={styles.rowWrap}>
@@ -656,8 +1090,11 @@ function SellTab() {
           <Pressable style={[styles.filterChip, currency === "EUR" && styles.filterChipActive]} onPress={() => setCurrency("EUR")}>
             <Text style={styles.filterText}>EUR</Text>
           </Pressable>
+          {estimatedUsdc > 0 ? <Tag value={`około ${estimatedUsdc} USDC`} /> : null}
         </View>
+        {formTouched && formErrors.price ? <Text style={styles.errorText}>{formErrors.price}</Text> : null}
 
+        <Text style={styles.formLabel}>Kategoria</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
           {categories.map((cat) => (
             <Pressable
@@ -671,16 +1108,117 @@ function SellTab() {
           ))}
         </ScrollView>
 
-        <TextInput testID="sell-condition" style={styles.input} value={condition} onChangeText={setCondition} placeholder="Stan" placeholderTextColor={theme.textMuted} />
-        <TextInput testID="sell-location" style={styles.input} value={location} onChangeText={setLocation} placeholder="Lokalizacja" placeholderTextColor={theme.textMuted} />
+        <Text style={styles.formLabel}>Stan produktu</Text>
+        <View style={styles.rowWrap}>
+          {listingConditions.map((item) => (
+            <Pressable
+              testID={`sell-condition-${item}`}
+              key={item}
+              style={[styles.filterChip, condition === item && styles.filterChipActive]}
+              onPress={() => setCondition(item)}
+            >
+              <Text style={styles.filterText}>{item}</Text>
+            </Pressable>
+          ))}
+        </View>
 
-        <PixelButton testID="sell-create" label={busy ? "Przetwarzanie..." : "Utwórz ofertę"} icon="add-circle-outline" onPress={createListing} disabled={busy} />
+        <Text style={styles.formLabel}>Dostawa i lokalizacja</Text>
+        <View style={styles.rowWrap}>
+          {listingShippingOptions.map((item) => (
+            <Pressable
+              testID={`sell-shipping-${item}`}
+              key={item}
+              style={[styles.filterChip, shippingOptions.includes(item) && styles.filterChipActive]}
+              onPress={() => toggleShippingOption(item)}
+            >
+              <Text style={styles.filterText}>{item}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {formTouched && formErrors.shipping ? <Text style={styles.errorText}>{formErrors.shipping}</Text> : null}
+        <TextInput
+          testID="sell-location"
+          style={[styles.input, formTouched && formErrors.location ? styles.inputError : null]}
+          value={location}
+          onChangeText={setLocation}
+          placeholder="Przybliżona lokalizacja, np. Kraków"
+          placeholderTextColor={theme.textMuted}
+          maxLength={120}
+        />
+        {formTouched && formErrors.location ? <Text style={styles.errorText}>{formErrors.location}</Text> : null}
+
+        <Text style={styles.formLabel}>Zdjęcia produktu</Text>
+        <Text style={styles.caption}>Dodaj do 10 zdjęć JPG, PNG lub WEBP. Każde zdjęcie możesz przyciąć do 4:3. Backend usuwa metadane i tworzy miniatury.</Text>
+        <PixelButton
+          testID="sell-pick-images"
+          label={pendingImages.length ? `Dodaj zdjęcia (${pendingImages.length}/10)` : "Wybierz zdjęcia"}
+          icon="images-outline"
+          variant="secondary"
+          onPress={pickListingImages}
+          disabled={busy || pendingImages.length >= 10}
+        />
+        {pendingImages.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imagePreviewRow}>
+            {pendingImages.map((image, index) => (
+              <View key={`${image.uri}-${index}`} style={styles.imagePreviewWrap}>
+                <Image source={{ uri: image.uri }} style={styles.imagePreview} />
+                <Pressable
+                  testID={`sell-remove-image-${index}`}
+                  style={styles.imageRemoveButton}
+                  onPress={() => setPendingImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                >
+                  <Ionicons name="close" size={16} color={theme.bg} />
+                </Pressable>
+                {index === 0 ? <Text style={styles.coverBadge}>GŁÓWNE</Text> : null}
+              </View>
+            ))}
+          </ScrollView>
+        ) : null}
+        {uploadStatus ? <Text style={styles.caption}>{uploadStatus}</Text> : null}
+
+        <View style={styles.previewCard}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>Podgląd oferty</Text>
+            <Tag value={condition} />
+          </View>
+          <Text style={styles.previewTitle}>{title.trim() || "Tytuł Twojej oferty"}</Text>
+          <Text style={styles.cardBody} numberOfLines={3}>
+            {description.trim() || "Tutaj kupujący zobaczy opis produktu."}
+          </Text>
+          {pendingImages[0] ? <Image source={{ uri: pendingImages[0].uri }} style={styles.listingPreviewImage} /> : null}
+          <View style={styles.rowWrap}>
+            <Tag value={selectedCategory?.name || "kategoria"} />
+            <Tag value={normalizedPrice > 0 ? `${normalizedPrice} ${currency}` : `0 ${currency}`} />
+            <Tag value={estimatedUsdc > 0 ? `~${estimatedUsdc} USDC` : "~0 USDC"} />
+            <Tag value={location.trim() || "lokalizacja"} />
+          </View>
+          <Text style={styles.caption}>Dostawa: {shippingOptions.join(" • ") || "nie wybrano"}</Text>
+        </View>
+
+        <PixelButton
+          testID="sell-create"
+          label={busy ? "Przetwarzanie..." : feeInfo ? "Oferta czeka na opłatę" : "Utwórz ofertę"}
+          icon="add-circle-outline"
+          onPress={createListing}
+          disabled={busy || !!feeInfo}
+        />
 
         {feeInfo && (
           <View style={[styles.panelSoft, { marginTop: 10 }]}> 
             <Text style={styles.caption}>Opłata za wystawienie: {feeInfo.amount} {feeInfo.token}</Text>
             <Text style={styles.caption}>Sieć: {feeInfo.network}</Text>
-            <PixelButton testID="sell-pay-listing-fee" label="Opłać listing fee" icon="wallet-outline" onPress={payListingFee} disabled={busy} />
+            <Text style={styles.caption}>Odbiorca: {feeInfo.receiverWallet}</Text>
+            <TextInput
+              testID="sell-listing-fee-tx-hash"
+              style={styles.input}
+              value={listingFeeTxHash}
+              onChangeText={setListingFeeTxHash}
+              placeholder="Hash wykonanej transakcji 0x..."
+              placeholderTextColor={theme.textMuted}
+              autoCapitalize="none"
+            />
+            <PixelButton testID="sell-pay-listing-fee" label="Opłać portfelem" icon="wallet-outline" onPress={payListingFee} disabled={busy} />
+            <PixelButton testID="sell-confirm-listing-fee" label="Potwierdź wklejony hash" icon="checkmark-circle-outline" variant="secondary" onPress={confirmManualListingFee} disabled={busy} />
 
             <Text style={[styles.caption, { marginTop: 8 }]}>Promowane oferty (crypto):</Text>
             <View style={styles.actionsRow}>
@@ -691,7 +1229,17 @@ function SellTab() {
               <View style={styles.panelSoft}>
                 <Text style={styles.caption}>Intent: {promotionIntent.intentId.slice(0, 8)}…</Text>
                 <Text style={styles.caption}>Pakiet: {promotionIntent.packageType} • Kwota: {promotionIntent.amount} USDC</Text>
+                <TextInput
+                  testID="promo-tx-hash"
+                  style={styles.input}
+                  value={promotionTxHash}
+                  onChangeText={setPromotionTxHash}
+                  placeholder="Hash wykonanej transakcji 0x..."
+                  placeholderTextColor={theme.textMuted}
+                  autoCapitalize="none"
+                />
                 <PixelButton testID="promo-confirm" label="Potwierdź tx promocji" icon="checkmark-circle-outline" onPress={confirmPromotion} />
+                <PixelButton testID="promo-pay-wallet" label="Opłać promocję portfelem" icon="wallet-outline" onPress={payPromotion} />
               </View>
             )}
           </View>
@@ -702,10 +1250,13 @@ function SellTab() {
 }
 
 function DealsTab() {
+  const { user } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [selected, setSelected] = useState<Transaction | null>(null);
   const [messages, setMessages] = useState<EncryptedMessage[]>([]);
   const [messageText, setMessageText] = useState("");
+  const [fundTxHash, setFundTxHash] = useState("");
+  const [e2eeStatus, setE2eeStatus] = useState("E2EE nie zostało jeszcze zainicjalizowane.");
 
   const refreshTransactions = useCallback(async () => {
     try {
@@ -721,11 +1272,45 @@ function DealsTab() {
   }, [selected]);
 
   const loadMessages = async (tx: Transaction) => {
+    if (!user) return;
     try {
+      const room = await getOrCreateRoomKey(tx.id, user.id);
       const data = await apiRequest<EncryptedMessage[]>(`/transactions/${tx.id}/messages`, { auth: true });
-      setMessages(data);
+      setMessages(
+        data.map((message) => {
+          try {
+            if (
+              !message.key_id ||
+              !message.client_message_id ||
+              message.encryption_version !== "nacl-secretbox-v1"
+            ) {
+              throw new Error("Starsza wiadomość bez E2EE");
+            }
+            return {
+              ...message,
+              plaintext: decryptChatMessage(
+                message.ciphertext,
+                message.nonce,
+                tx.id,
+                message.sender_id,
+                message.client_message_id,
+                message.key_id,
+                room,
+              ),
+            };
+          } catch {
+            return { ...message, plaintext: "[Nie można uwierzytelnić lub odszyfrować wiadomości]" };
+          }
+        }),
+      );
+      setE2eeStatus(
+        `E2EE aktywne • porównaj fingerprinty innym kanałem: ${room.fingerprints
+          .map((item) => `${item.userId.slice(0, 8)}:${item.fingerprint}`)
+          .join(" / ")}`,
+      );
     } catch (error: any) {
-      Alert.alert("Błąd", error?.message || "Nie udało się pobrać wiadomości");
+      setMessages([]);
+      setE2eeStatus(error?.message || "Nie udało się zainicjalizować E2EE.");
     }
   };
 
@@ -734,15 +1319,19 @@ function DealsTab() {
   }, [refreshTransactions]);
 
   const sendMessage = async () => {
-    if (!selected || !messageText.trim()) return;
+    if (!selected || !user || !messageText.trim()) return;
     try {
-      const encrypted = e2eeEncrypt(messageText.trim(), selected.deal_room_id);
+      const room = await getOrCreateRoomKey(selected.id, user.id);
+      const encoded = encryptChatMessage(messageText.trim(), selected.id, user.id, room);
       await apiRequest(`/transactions/${selected.id}/messages`, {
         method: "POST",
         auth: true,
         body: {
-          ciphertext: encrypted.ciphertext,
-          nonce: encrypted.nonce,
+          ciphertext: encoded.ciphertext,
+          nonce: encoded.nonce,
+          client_message_id: encoded.client_message_id,
+          key_id: encoded.key_id,
+          encryption_version: encoded.encryption_version,
           message_type: "text",
           expires_in_days: 14,
         },
@@ -769,11 +1358,53 @@ function DealsTab() {
     }
   };
 
+  const fundEscrow = async () => {
+    if (!selected) return;
+    try {
+      const txHash = await fundEscrowWithWallet({
+        network: selected.network,
+        escrowAddress: selected.escrow_receiver,
+        reference: selected.escrow_reference,
+        seller: selected.seller_wallet,
+        amount: selected.gross_amount,
+        feePercent: selected.fee_percent,
+      });
+      setFundTxHash(txHash);
+      await callAction("/fund", {
+        amount: selected.gross_amount,
+        token: selected.token,
+        network: selected.network,
+        tx_hash: txHash,
+      });
+    } catch (error: any) {
+      Alert.alert("Błąd portfela", error?.shortMessage || error?.message || "Nie udało się zasilić escrow");
+    }
+  };
+
+  const escrowAction = async (
+    action: "markShipped" | "confirmDelivery" | "openDispute",
+    endpoint: string,
+    body?: any,
+  ) => {
+    if (!selected) return;
+    try {
+      const onchainTxHash = await runEscrowActionWithWallet({
+        network: selected.network,
+        escrowAddress: selected.escrow_receiver,
+        reference: selected.escrow_reference,
+        action,
+      });
+      await callAction(endpoint, { ...(body || {}), onchain_tx_hash: onchainTxHash });
+    } catch (error: any) {
+      Alert.alert("Błąd portfela", error?.shortMessage || error?.message || "Akcja on-chain nieudana");
+    }
+  };
+
   return (
     <View style={styles.tabContent}>
       <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
       <Text style={styles.h2}>Deal Room</Text>
-      <Text style={styles.subtitle}>Alias transakcyjne • E2EE chat • Escrow status</Text>
+      <Text style={styles.subtitle}>Alias transakcyjne • prywatny czat uczestników • Escrow status</Text>
 
       {!selected ? (
         <FlatList
@@ -817,6 +1448,16 @@ function DealsTab() {
             <Text style={styles.caption}>
               Alias kupującego: {selected.buyer_alias} • Alias sprzedającego: {selected.seller_alias}
             </Text>
+            <Text style={styles.caption}>Escrow odbiorca: {selected.escrow_receiver || "brak konfiguracji"}</Text>
+            <TextInput
+              testID="deal-fund-tx-hash"
+              style={styles.input}
+              value={fundTxHash}
+              onChangeText={setFundTxHash}
+              placeholder="Hash zasilenia escrow 0x..."
+              placeholderTextColor={theme.textMuted}
+              autoCapitalize="none"
+            />
 
             <View style={styles.actionsRow}>
               <PixelButton
@@ -824,14 +1465,7 @@ function DealsTab() {
                 label="Fund escrow"
                 icon="wallet-outline"
                 variant="secondary"
-                onPress={() =>
-                  callAction("/fund", {
-                    amount: selected.gross_amount,
-                    token: selected.token,
-                    network: selected.network,
-                    tx_hash: `0xFUND${Date.now()}`,
-                  })
-                }
+                onPress={fundEscrow}
               />
               <PixelButton
                 testID="deal-mark-shipped"
@@ -839,7 +1473,7 @@ function DealsTab() {
                 icon="cube-outline"
                 variant="secondary"
                 onPress={() =>
-                  callAction("/mark-shipped", {
+                  escrowAction("markShipped", "/mark-shipped", {
                     encrypted_address_blob: `cipher-address-${Date.now()}`,
                     carrier: "InPost",
                   })
@@ -852,21 +1486,24 @@ function DealsTab() {
                 testID="deal-confirm-delivery"
                 label="Confirm delivery"
                 icon="checkmark-done-outline"
-                onPress={() => callAction("/confirm-delivery")}
+                onPress={() => escrowAction("confirmDelivery", "/confirm-delivery")}
               />
               <PixelButton
                 testID="deal-open-dispute"
                 label="Open dispute"
                 icon="alert-circle-outline"
                 variant="danger"
-                onPress={() => callAction("/open-dispute", { reason: "Problem z produktem" })}
+                onPress={() => escrowAction("openDispute", "/open-dispute", { reason: "Problem z produktem" })}
               />
             </View>
           </View>
 
           <View style={[styles.panel, { flex: 1 }]}> 
-            <Text style={styles.cardTitle}>Czat E2EE</Text>
-            <Text style={styles.caption}>Admin nie widzi treści bez dobrowolnego zgłoszenia dowodów.</Text>
+            <Text style={styles.cardTitle}>Czat transakcji</Text>
+            <Text style={styles.caption}>
+              Pełne E2EE: treść mogą odszyfrować wyłącznie uczestnicy posiadający przypięte klucze prywatne. Backend i administrator nie mają klucza.
+            </Text>
+            <Text style={styles.caption}>{e2eeStatus}</Text>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
               {messages.map((msg) => (
                 <View key={msg.id} style={styles.messageBubble}>
@@ -877,7 +1514,7 @@ function DealsTab() {
                     />
                     <Text style={styles.caption}>{msg.sender_id === selected.buyer_id ? "Kupujący" : "Sprzedający"}</Text>
                   </View>
-                  <Text style={styles.messageText}>{e2eeDecrypt(msg.ciphertext, msg.nonce, selected.deal_room_id)}</Text>
+                  <Text style={styles.messageText}>{msg.plaintext}</Text>
                   <Text style={styles.caption}>{new Date(msg.created_at).toLocaleString()}</Text>
                 </View>
               ))}
@@ -887,14 +1524,14 @@ function DealsTab() {
               style={styles.input}
               value={messageText}
               onChangeText={setMessageText}
-              placeholder="Wiadomość E2EE"
+              placeholder="Wiadomość"
               placeholderTextColor={theme.textMuted}
             />
             <View style={styles.actionsRow}>
               <PixelButton testID="deal-send-message" label="Wyślij" icon="send-outline" onPress={sendMessage} />
               <PixelButton
                 testID="deal-report-evidence"
-                label="Zgłoś dowód"
+                label="Zgłoś ciphertext"
                 icon="flag-outline"
                 variant="secondary"
                 onPress={async () => {
@@ -903,10 +1540,7 @@ function DealsTab() {
                       method: "POST",
                       auth: true,
                       body: {
-                        selected_messages: messages.slice(0, 2).map((m) => ({
-                          id: m.id,
-                          decrypted_text: e2eeDecrypt(m.ciphertext, m.nonce, selected.deal_room_id),
-                        })),
+                        selected_message_ids: messages.slice(0, 2).map((m) => m.id),
                         dispute_reason: "Dobrowolne ujawnienie dowodów",
                       },
                     });
@@ -1030,6 +1664,29 @@ function ProfileTab() {
     }
   };
 
+  const linkWallet = async () => {
+    try {
+      const address = await linkCurrentWallet();
+      await refreshProfile();
+      Alert.alert("Sukces", `Przypięto portfel ${address.slice(0, 6)}…${address.slice(-4)}`);
+    } catch (error: any) {
+      Alert.alert("Crypto Wallet", error?.shortMessage || error?.message || "Nie udało się przypiąć portfela");
+    }
+  };
+
+  const setPrimaryWallet = async (walletAddress: string) => {
+    try {
+      await apiRequest("/me/wallets/primary", {
+        method: "POST",
+        auth: true,
+        body: { wallet_address: walletAddress },
+      });
+      await refreshProfile();
+    } catch (error: any) {
+      Alert.alert("Crypto Wallet", error?.message || "Nie udało się ustawić głównego portfela");
+    }
+  };
+
   return (
     <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 160 }}>
       <Image source={{ uri: pixelHeroImage }} style={styles.pixelHero} />
@@ -1060,7 +1717,24 @@ function ProfileTab() {
         <View style={styles.actionsRow}>
           <PixelButton label={checking ? "Sprawdzanie..." : "Biometria"} icon="finger-print-outline" onPress={runBiometric} />
           <PixelButton label="Dodaj passkey" icon="key-outline" variant="secondary" onPress={registerPasskeyDemo} />
+          <PixelButton label="Przypnij portfel" icon="wallet-outline" variant="secondary" onPress={linkWallet} />
         </View>
+        {(user?.wallets || []).map((wallet) => (
+          <View key={wallet.address} style={styles.aliasRow}>
+            <Text style={styles.caption}>
+              {wallet.address.slice(0, 8)}…{wallet.address.slice(-6)}
+              {wallet.is_primary ? " • główny" : ""}
+            </Text>
+            {!wallet.is_primary ? (
+              <PixelButton
+                label="Ustaw główny"
+                icon="star-outline"
+                variant="secondary"
+                onPress={() => setPrimaryWallet(wallet.address)}
+              />
+            ) : null}
+          </View>
+        ))}
       </View>
 
       <View style={styles.panel}>
@@ -1139,9 +1813,9 @@ function AdminTab() {
     try {
       const [d, u, l, sp] = await Promise.all([
         apiRequest<AdminDashboard>("/admin/dashboard", { auth: true }),
-        apiRequest<any[]>("/admin/users", { auth: true }),
-        apiRequest<any[]>("/admin/listings", { auth: true }),
-        apiRequest<any[]>("/admin/disputes", { auth: true }),
+        apiRequest<any[]>("/admin/users?limit=100&offset=0", { auth: true }),
+        apiRequest<any[]>("/admin/listings?limit=100&offset=0", { auth: true }),
+        apiRequest<any[]>("/admin/disputes?limit=100&offset=0", { auth: true }),
       ]);
       setDashboard(d);
       setUsers(u);
@@ -1168,7 +1842,11 @@ function AdminTab() {
         <Text style={styles.caption}>Aktywne transakcje: {dashboard?.active_transactions || 0}</Text>
         <Text style={styles.caption}>Otwarte spory: {dashboard?.open_disputes || 0}</Text>
         <Text style={styles.caption}>Otwarte zgłoszenia: {dashboard?.open_reports || 0}</Text>
-        <Text style={styles.caption}>Przychód prowizyjny: {dashboard?.commission_revenue_crypto || 0} USDC</Text>
+        {(dashboard?.commission_revenue_by_asset || []).map((item) => (
+          <Text key={`${item.network}:${item.token}`} style={styles.caption}>
+            Przychód: {item.amount} {item.token} / {item.network} ({item.transactions} transakcji)
+          </Text>
+        ))}
       </View>
 
       <View style={styles.panel}>
@@ -1330,6 +2008,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
+    width: 375,
+    alignSelf: "center",
   },
   loaderWrap: {
     flex: 1,
@@ -1396,6 +2076,101 @@ const styles = StyleSheet.create({
     backgroundColor: theme.inputBg,
     fontFamily: "VT323_400Regular",
     fontSize: 24,
+  },
+  inputError: {
+    borderColor: theme.danger,
+  },
+  descriptionInput: {
+    minHeight: 112,
+    paddingTop: 10,
+  },
+  formLabel: {
+    color: theme.neonBlue,
+    fontFamily: "VT323_400Regular",
+    fontSize: 22,
+    marginTop: 4,
+  },
+  fieldMeta: {
+    color: theme.textMuted,
+    fontFamily: "VT323_400Regular",
+    fontSize: 16,
+    textAlign: "right",
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: theme.border,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: theme.neonGreen,
+  },
+  previewCard: {
+    backgroundColor: theme.panelSoft,
+    borderRadius: 4,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: theme.neonViolet,
+    gap: 8,
+  },
+  previewTitle: {
+    color: theme.text,
+    fontFamily: "PressStart2P_400Regular",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  imagePreviewRow: {
+    gap: 10,
+    paddingVertical: 4,
+  },
+  imagePreviewWrap: {
+    width: 92,
+    height: 92,
+    position: "relative",
+  },
+  imagePreview: {
+    width: 92,
+    height: 92,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: theme.borderGlow,
+  },
+  imageRemoveButton: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: theme.danger,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  coverBadge: {
+    position: "absolute",
+    left: 4,
+    bottom: 4,
+    color: theme.bg,
+    backgroundColor: theme.neonGreen,
+    fontFamily: "VT323_400Regular",
+    fontSize: 14,
+    paddingHorizontal: 4,
+  },
+  listingPreviewImage: {
+    width: "100%",
+    height: 160,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  marketplaceImage: {
+    width: "100%",
+    height: 180,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: theme.borderGlow,
   },
   button: {
     minHeight: 44,
@@ -1586,5 +2361,45 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     borderWidth: 1,
     borderColor: theme.border,
+  },
+  passwordRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  eyeBtn: {
+    minHeight: 46,
+    minWidth: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  strengthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  strengthBar: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: theme.border,
+  },
+  strengthText: {
+    fontFamily: "VT323_400Regular",
+    fontSize: 18,
+    minWidth: 60,
+  },
+  errorText: {
+    color: theme.danger,
+    fontFamily: "VT323_400Regular",
+    fontSize: 18,
+  },
+  authActionStatus: {
+    color: theme.neonBlue,
+    fontFamily: "VT323_400Regular",
+    fontSize: 18,
+    lineHeight: 20,
+    minHeight: 20,
   },
 });
